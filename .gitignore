@@ -1,0 +1,21 @@
+# Binaries
+/tmp
+/bin
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+
+# Go build cache
+.gocache
+coverage.out
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db

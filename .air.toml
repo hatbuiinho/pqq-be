@@ -1,0 +1,19 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "mkdir -p .gocache ./tmp && GOCACHE=$PWD/.gocache go build -o ./tmp/server ./cmd/server"
+bin = "./tmp/server"
+full_bin = "./tmp/server"
+include_ext = ["go", "tpl", "tmpl", "html", "sql"]
+exclude_dir = ["tmp", "vendor", ".gocache"]
+delay = 300
+stop_on_error = true
+send_interrupt = true
+kill_delay = 500
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = true
