@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"pqq/be/internal/postgres/db"
 	"pqq/be/internal/sync"
 
 	"github.com/jackc/pgx/v5"
@@ -15,11 +16,15 @@ import (
 )
 
 type SyncStore struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	queries *db.Queries
 }
 
 func NewSyncStore(pool *pgxpool.Pool) *SyncStore {
-	return &SyncStore{pool: pool}
+	return &SyncStore{
+		pool:    pool,
+		queries: db.New(pool),
+	}
 }
 
 func (s *SyncStore) Begin(ctx context.Context) (pgx.Tx, error) {
@@ -202,60 +207,19 @@ func (s *SyncStore) FindClubByCode(
 	clubCode string,
 	excludeID string,
 ) (*sync.StoredRecord, error) {
-	query := `
-		SELECT id, code, name, phone, email, address, notes, is_active, created_at, updated_at, last_modified_at, deleted_at
-		FROM clubs
-		WHERE deleted_at IS NULL
-			AND id <> $1
-			AND code = $2
-		LIMIT 1
-	`
-
-	var record sync.ClubRecord
-	var createdAt, updatedAt, lastModifiedAt time.Time
-	var deletedAt *time.Time
-	if err := tx.QueryRow(ctx, query, excludeID, clubCode).Scan(
-		&record.ID,
-		&record.Code,
-		&record.Name,
-		&record.Phone,
-		&record.Email,
-		&record.Address,
-		&record.Notes,
-		&record.IsActive,
-		&createdAt,
-		&updatedAt,
-		&lastModifiedAt,
-		&deletedAt,
-	); err != nil {
+	row, err := s.queries.WithTx(tx).FindActiveClubByCode(ctx, db.FindActiveClubByCodeParams{
+		ExcludeID: excludeID,
+		Code:      clubCode,
+	})
+	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
 
-	record.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
-	record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
-	record.LastModifiedAt = lastModifiedAt.UTC().Format(time.RFC3339Nano)
-	record.SyncStatus = "synced"
-	if deletedAt != nil {
-		value := deletedAt.UTC().Format(time.RFC3339Nano)
-		record.DeletedAt = &value
-	}
-
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
-
-	return &sync.StoredRecord{
-		EntityName:       sync.EntityClubs,
-		RecordID:         record.ID,
-		Payload:          payload,
-		DeletedAt:        record.DeletedAt,
-		LastModifiedAt:   record.LastModifiedAt,
-		ServerModifiedAt: record.LastModifiedAt,
-	}, nil
+	record := clubRecordFromRow(row)
+	return storedRecordFromSyncRecord(sync.EntityClubs, record.ID, record.DeletedAt, record.LastModifiedAt, record)
 }
 
 func (s *SyncStore) FindClubByName(
@@ -263,69 +227,21 @@ func (s *SyncStore) FindClubByName(
 	tx pgx.Tx,
 	clubName string,
 ) (*sync.StoredRecord, error) {
-	query := `
-		SELECT id, code, name, phone, email, address, notes, is_active, created_at, updated_at, last_modified_at, deleted_at
-		FROM clubs
-		WHERE deleted_at IS NULL
-	`
-
-	rows, err := tx.Query(ctx, query)
+	rows, err := s.queries.WithTx(tx).ListActiveClubs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	targetName := sync.NormalizeSearchText(clubName)
-	for rows.Next() {
-		var record sync.ClubRecord
-		var createdAt, updatedAt, lastModifiedAt time.Time
-		var deletedAt *time.Time
-		if err := rows.Scan(
-			&record.ID,
-			&record.Code,
-			&record.Name,
-			&record.Phone,
-			&record.Email,
-			&record.Address,
-			&record.Notes,
-			&record.IsActive,
-			&createdAt,
-			&updatedAt,
-			&lastModifiedAt,
-			&deletedAt,
-		); err != nil {
-			return nil, err
-		}
-
-		if sync.NormalizeSearchText(record.Name) != targetName {
+	for _, row := range rows {
+		if sync.NormalizeSearchText(row.Name) != targetName {
 			continue
 		}
-
-		record.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
-		record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
-		record.LastModifiedAt = lastModifiedAt.UTC().Format(time.RFC3339Nano)
-		record.SyncStatus = "synced"
-		if deletedAt != nil {
-			value := deletedAt.UTC().Format(time.RFC3339Nano)
-			record.DeletedAt = &value
-		}
-
-		payload, err := json.Marshal(record)
-		if err != nil {
-			return nil, err
-		}
-
-		return &sync.StoredRecord{
-			EntityName:       sync.EntityClubs,
-			RecordID:         record.ID,
-			Payload:          payload,
-			DeletedAt:        record.DeletedAt,
-			LastModifiedAt:   record.LastModifiedAt,
-			ServerModifiedAt: record.LastModifiedAt,
-		}, nil
+		record := clubRecordFromRow(row)
+		return storedRecordFromSyncRecord(sync.EntityClubs, record.ID, record.DeletedAt, record.LastModifiedAt, record)
 	}
 
-	return nil, rows.Err()
+	return nil, nil
 }
 
 func (s *SyncStore) FindClubGroupByName(
@@ -335,68 +251,21 @@ func (s *SyncStore) FindClubGroupByName(
 	groupName string,
 	excludeID string,
 ) (*sync.StoredRecord, error) {
-	query := `
-		SELECT id, club_id, name, description, is_active, created_at, updated_at, last_modified_at, deleted_at
-		FROM club_groups
-		WHERE deleted_at IS NULL
-			AND club_id = $2
-			AND id <> $1
-	`
-
-	rows, err := tx.Query(ctx, query, excludeID, clubID)
+	rows, err := s.queries.WithTx(tx).ListActiveClubGroups(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	targetName := sync.NormalizeSearchText(groupName)
-	for rows.Next() {
-		var record sync.ClubGroupRecord
-		var createdAt, updatedAt, lastModifiedAt time.Time
-		var deletedAt *time.Time
-		if err := rows.Scan(
-			&record.ID,
-			&record.ClubID,
-			&record.Name,
-			&record.Description,
-			&record.IsActive,
-			&createdAt,
-			&updatedAt,
-			&lastModifiedAt,
-			&deletedAt,
-		); err != nil {
-			return nil, err
-		}
-
-		if sync.NormalizeSearchText(record.Name) != targetName {
+	for _, row := range rows {
+		if row.ClubID != clubID || row.ID == excludeID || sync.NormalizeSearchText(row.Name) != targetName {
 			continue
 		}
-
-		record.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
-		record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
-		record.LastModifiedAt = lastModifiedAt.UTC().Format(time.RFC3339Nano)
-		record.SyncStatus = "synced"
-		if deletedAt != nil {
-			value := deletedAt.UTC().Format(time.RFC3339Nano)
-			record.DeletedAt = &value
-		}
-
-		payload, err := json.Marshal(record)
-		if err != nil {
-			return nil, err
-		}
-
-		return &sync.StoredRecord{
-			EntityName:       sync.EntityClubGroups,
-			RecordID:         record.ID,
-			Payload:          payload,
-			DeletedAt:        record.DeletedAt,
-			LastModifiedAt:   record.LastModifiedAt,
-			ServerModifiedAt: record.LastModifiedAt,
-		}, nil
+		record := clubGroupRecordFromRow(row)
+		return storedRecordFromSyncRecord(sync.EntityClubGroups, record.ID, record.DeletedAt, record.LastModifiedAt, record)
 	}
 
-	return nil, rows.Err()
+	return nil, nil
 }
 
 func (s *SyncStore) FindClubScheduleByWeekday(
@@ -406,57 +275,19 @@ func (s *SyncStore) FindClubScheduleByWeekday(
 	weekday string,
 	excludeID string,
 ) (*sync.StoredRecord, error) {
-	query := `
-		SELECT id, club_id, weekday, is_active, created_at, updated_at, last_modified_at, deleted_at
-		FROM club_schedules
-		WHERE deleted_at IS NULL
-			AND id <> $1
-			AND club_id = $2
-			AND weekday = $3
-		LIMIT 1
-	`
-
-	var record sync.ClubScheduleRecord
-	var createdAt, updatedAt, lastModifiedAt time.Time
-	var deletedAt *time.Time
-	if err := tx.QueryRow(ctx, query, excludeID, clubID, weekday).Scan(
-		&record.ID,
-		&record.ClubID,
-		&record.Weekday,
-		&record.IsActive,
-		&createdAt,
-		&updatedAt,
-		&lastModifiedAt,
-		&deletedAt,
-	); err != nil {
+	row, err := s.queries.WithTx(tx).FindActiveClubScheduleByWeekday(ctx, db.FindActiveClubScheduleByWeekdayParams{
+		ExcludeID: excludeID,
+		ClubID:    clubID,
+		Weekday:   weekday,
+	})
+	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
-
-	record.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
-	record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
-	record.LastModifiedAt = lastModifiedAt.UTC().Format(time.RFC3339Nano)
-	record.SyncStatus = "synced"
-	if deletedAt != nil {
-		value := deletedAt.UTC().Format(time.RFC3339Nano)
-		record.DeletedAt = &value
-	}
-
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
-
-	return &sync.StoredRecord{
-		EntityName:       sync.EntityClubSchedules,
-		RecordID:         record.ID,
-		Payload:          payload,
-		DeletedAt:        record.DeletedAt,
-		LastModifiedAt:   record.LastModifiedAt,
-		ServerModifiedAt: record.LastModifiedAt,
-	}, nil
+	record := clubScheduleRecordFromRow(row)
+	return storedRecordFromSyncRecord(sync.EntityClubSchedules, record.ID, record.DeletedAt, record.LastModifiedAt, record)
 }
 
 func (s *SyncStore) FindBeltRankByOrder(
@@ -465,57 +296,18 @@ func (s *SyncStore) FindBeltRankByOrder(
 	order int,
 	excludeID string,
 ) (*sync.StoredRecord, error) {
-	query := `
-		SELECT id, name, rank_order, description, is_active, created_at, updated_at, last_modified_at, deleted_at
-		FROM belt_ranks
-		WHERE deleted_at IS NULL
-			AND id <> $1
-			AND rank_order = $2
-		LIMIT 1
-	`
-
-	var record sync.BeltRankRecord
-	var createdAt, updatedAt, lastModifiedAt time.Time
-	var deletedAt *time.Time
-	if err := tx.QueryRow(ctx, query, excludeID, order).Scan(
-		&record.ID,
-		&record.Name,
-		&record.Order,
-		&record.Description,
-		&record.IsActive,
-		&createdAt,
-		&updatedAt,
-		&lastModifiedAt,
-		&deletedAt,
-	); err != nil {
+	row, err := s.queries.WithTx(tx).FindActiveBeltRankByOrder(ctx, db.FindActiveBeltRankByOrderParams{
+		ExcludeID: excludeID,
+		RankOrder: int32(order),
+	})
+	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
-
-	record.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
-	record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
-	record.LastModifiedAt = lastModifiedAt.UTC().Format(time.RFC3339Nano)
-	record.SyncStatus = "synced"
-	if deletedAt != nil {
-		value := deletedAt.UTC().Format(time.RFC3339Nano)
-		record.DeletedAt = &value
-	}
-
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
-
-	return &sync.StoredRecord{
-		EntityName:       sync.EntityBeltRanks,
-		RecordID:         record.ID,
-		Payload:          payload,
-		DeletedAt:        record.DeletedAt,
-		LastModifiedAt:   record.LastModifiedAt,
-		ServerModifiedAt: record.LastModifiedAt,
-	}, nil
+	record := beltRankRecordFromRow(row)
+	return storedRecordFromSyncRecord(sync.EntityBeltRanks, record.ID, record.DeletedAt, record.LastModifiedAt, record)
 }
 
 func (s *SyncStore) FindBeltRankByName(
@@ -523,66 +315,21 @@ func (s *SyncStore) FindBeltRankByName(
 	tx pgx.Tx,
 	beltRankName string,
 ) (*sync.StoredRecord, error) {
-	query := `
-		SELECT id, name, rank_order, description, is_active, created_at, updated_at, last_modified_at, deleted_at
-		FROM belt_ranks
-		WHERE deleted_at IS NULL
-	`
-
-	rows, err := tx.Query(ctx, query)
+	rows, err := s.queries.WithTx(tx).ListActiveBeltRanks(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	targetName := sync.NormalizeSearchText(beltRankName)
-	for rows.Next() {
-		var record sync.BeltRankRecord
-		var createdAt, updatedAt, lastModifiedAt time.Time
-		var deletedAt *time.Time
-		if err := rows.Scan(
-			&record.ID,
-			&record.Name,
-			&record.Order,
-			&record.Description,
-			&record.IsActive,
-			&createdAt,
-			&updatedAt,
-			&lastModifiedAt,
-			&deletedAt,
-		); err != nil {
-			return nil, err
-		}
-
-		if sync.NormalizeSearchText(record.Name) != targetName {
+	for _, row := range rows {
+		if sync.NormalizeSearchText(row.Name) != targetName {
 			continue
 		}
-
-		record.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
-		record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
-		record.LastModifiedAt = lastModifiedAt.UTC().Format(time.RFC3339Nano)
-		record.SyncStatus = "synced"
-		if deletedAt != nil {
-			value := deletedAt.UTC().Format(time.RFC3339Nano)
-			record.DeletedAt = &value
-		}
-
-		payload, err := json.Marshal(record)
-		if err != nil {
-			return nil, err
-		}
-
-		return &sync.StoredRecord{
-			EntityName:       sync.EntityBeltRanks,
-			RecordID:         record.ID,
-			Payload:          payload,
-			DeletedAt:        record.DeletedAt,
-			LastModifiedAt:   record.LastModifiedAt,
-			ServerModifiedAt: record.LastModifiedAt,
-		}, nil
+		record := beltRankRecordFromRow(row)
+		return storedRecordFromSyncRecord(sync.EntityBeltRanks, record.ID, record.DeletedAt, record.LastModifiedAt, record)
 	}
 
-	return nil, rows.Err()
+	return nil, nil
 }
 
 func (s *SyncStore) FindStudentByCode(
@@ -591,22 +338,19 @@ func (s *SyncStore) FindStudentByCode(
 	studentCode string,
 	excludeID string,
 ) (*sync.StoredRecord, error) {
-	query := `
-		SELECT id, student_code, full_name, date_of_birth, gender, phone, email, address, club_id, group_id, belt_rank_id, joined_at, status, notes, created_at, updated_at, last_modified_at, deleted_at
-		FROM students
-		WHERE deleted_at IS NULL
-			AND id <> $1
-			AND student_code = $2
-		LIMIT 1
-	`
-
-	record, err := scanStudentRecord(ctx, tx, query, excludeID, studentCode)
-	if err != nil || record == nil {
-		return record, err
+	row, err := s.queries.WithTx(tx).FindActiveStudentByCode(ctx, db.FindActiveStudentByCodeParams{
+		ExcludeID:   excludeID,
+		StudentCode: studentCode,
+	})
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
 	}
 
-	record.EntityName = sync.EntityStudents
-	return record, nil
+	record := studentRecordFromRow(row)
+	return storedRecordFromSyncRecord(sync.EntityStudents, record.ID, record.DeletedAt, record.LastModifiedAt, record)
 }
 
 func (s *SyncStore) FindStudentScheduleByWeekday(
@@ -616,57 +360,19 @@ func (s *SyncStore) FindStudentScheduleByWeekday(
 	weekday string,
 	excludeID string,
 ) (*sync.StoredRecord, error) {
-	query := `
-		SELECT id, student_id, weekday, is_active, created_at, updated_at, last_modified_at, deleted_at
-		FROM student_schedules
-		WHERE deleted_at IS NULL
-			AND id <> $1
-			AND student_id = $2
-			AND weekday = $3
-		LIMIT 1
-	`
-
-	var record sync.StudentScheduleRecord
-	var createdAt, updatedAt, lastModifiedAt time.Time
-	var deletedAt *time.Time
-	if err := tx.QueryRow(ctx, query, excludeID, studentID, weekday).Scan(
-		&record.ID,
-		&record.StudentID,
-		&record.Weekday,
-		&record.IsActive,
-		&createdAt,
-		&updatedAt,
-		&lastModifiedAt,
-		&deletedAt,
-	); err != nil {
+	row, err := s.queries.WithTx(tx).FindActiveStudentScheduleByWeekday(ctx, db.FindActiveStudentScheduleByWeekdayParams{
+		ExcludeID: excludeID,
+		StudentID: studentID,
+		Weekday:   weekday,
+	})
+	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
-
-	record.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
-	record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
-	record.LastModifiedAt = lastModifiedAt.UTC().Format(time.RFC3339Nano)
-	record.SyncStatus = "synced"
-	if deletedAt != nil {
-		value := deletedAt.UTC().Format(time.RFC3339Nano)
-		record.DeletedAt = &value
-	}
-
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
-
-	return &sync.StoredRecord{
-		EntityName:       sync.EntityStudentSchedules,
-		RecordID:         record.ID,
-		Payload:          payload,
-		DeletedAt:        record.DeletedAt,
-		LastModifiedAt:   record.LastModifiedAt,
-		ServerModifiedAt: record.LastModifiedAt,
-	}, nil
+	record := studentScheduleRecordFromRow(row)
+	return storedRecordFromSyncRecord(sync.EntityStudentSchedules, record.ID, record.DeletedAt, record.LastModifiedAt, record)
 }
 
 func (s *SyncStore) FindAttendanceRecordBySessionAndStudent(
@@ -676,92 +382,23 @@ func (s *SyncStore) FindAttendanceRecordBySessionAndStudent(
 	studentID string,
 	excludeID string,
 ) (*sync.StoredRecord, error) {
-	query := `
-		SELECT id, session_id, student_id, attendance_status, check_in_at, notes, created_at, updated_at, last_modified_at, deleted_at
-		FROM attendance_records
-		WHERE deleted_at IS NULL
-			AND session_id = $2
-			AND student_id = $3
-			AND id <> $1
-		LIMIT 1
-	`
-
-	var record sync.AttendanceRecord
-	var createdAt, updatedAt, lastModifiedAt time.Time
-	var deletedAt *time.Time
-	var checkInAt *time.Time
-	if err := tx.QueryRow(ctx, query, excludeID, sessionID, studentID).Scan(
-		&record.ID,
-		&record.SessionID,
-		&record.StudentID,
-		&record.AttendanceStatus,
-		&checkInAt,
-		&record.Notes,
-		&createdAt,
-		&updatedAt,
-		&lastModifiedAt,
-		&deletedAt,
-	); err != nil {
+	row, err := s.queries.WithTx(tx).FindActiveAttendanceRecordBySessionAndStudent(ctx, db.FindActiveAttendanceRecordBySessionAndStudentParams{
+		ExcludeID: excludeID,
+		SessionID: sessionID,
+		StudentID: studentID,
+	})
+	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
-
-	record.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
-	record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
-	record.LastModifiedAt = lastModifiedAt.UTC().Format(time.RFC3339Nano)
-	record.SyncStatus = "synced"
-	if checkInAt != nil {
-		value := checkInAt.UTC().Format(time.RFC3339Nano)
-		record.CheckInAt = &value
-	}
-	if deletedAt != nil {
-		value := deletedAt.UTC().Format(time.RFC3339Nano)
-		record.DeletedAt = &value
-	}
-
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return nil, err
-	}
-
-	return &sync.StoredRecord{
-		EntityName:       sync.EntityAttendanceRecords,
-		RecordID:         record.ID,
-		Payload:          payload,
-		DeletedAt:        record.DeletedAt,
-		LastModifiedAt:   record.LastModifiedAt,
-		ServerModifiedAt: record.LastModifiedAt,
-	}, nil
+	record := attendanceRecordFromRow(row)
+	return storedRecordFromSyncRecord(sync.EntityAttendanceRecords, record.ID, record.DeletedAt, record.LastModifiedAt, record)
 }
 
 func (s *SyncStore) ListClubScheduleWeekdays(ctx context.Context, tx pgx.Tx, clubID string) ([]string, error) {
-	query := `
-		SELECT weekday
-		FROM club_schedules
-		WHERE club_id = $1
-			AND deleted_at IS NULL
-			AND is_active = TRUE
-		ORDER BY weekday ASC
-	`
-
-	rows, err := tx.Query(ctx, query, clubID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	weekdays := make([]string, 0)
-	for rows.Next() {
-		var weekday string
-		if err := rows.Scan(&weekday); err != nil {
-			return nil, err
-		}
-		weekdays = append(weekdays, weekday)
-	}
-
-	return weekdays, rows.Err()
+	return s.queries.WithTx(tx).ListActiveClubScheduleWeekdays(ctx, clubID)
 }
 
 func (s *SyncStore) ReplaceStudentSchedule(ctx context.Context, tx pgx.Tx, studentID string, mode string, weekdays []string, serverNow string) error {
@@ -976,49 +613,94 @@ func (s *SyncStore) NextStudentCode(ctx context.Context, tx pgx.Tx) (string, err
 }
 
 func (s *SyncStore) ListAllCurrent(ctx context.Context) ([]sync.ClubRecord, []sync.ClubGroupRecord, []sync.ClubScheduleRecord, []sync.BeltRankRecord, []sync.StudentRecord, []sync.StudentScheduleProfileRecord, []sync.StudentScheduleRecord, []sync.AttendanceSessionRecord, []sync.AttendanceRecord, error) {
-	clubs, err := listAllClubs(ctx, s.pool)
+	clubRows, err := s.queries.ListActiveClubs(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 
-	clubGroups, err := listAllClubGroups(ctx, s.pool)
+	clubGroupRows, err := s.queries.ListActiveClubGroups(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 
-	clubSchedules, err := listAllClubSchedules(ctx, s.pool)
+	clubScheduleRows, err := s.queries.ListActiveClubSchedules(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 
-	beltRanks, err := listAllBeltRanks(ctx, s.pool)
+	beltRankRows, err := s.queries.ListActiveBeltRanks(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 
-	students, err := listAllStudents(ctx, s.pool)
+	studentRows, err := s.queries.ListActiveStudents(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 
-	studentScheduleProfiles, err := listAllStudentScheduleProfiles(ctx, s.pool)
+	studentScheduleProfileRows, err := s.queries.ListActiveStudentScheduleProfiles(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 
-	studentSchedules, err := listAllStudentSchedules(ctx, s.pool)
+	studentScheduleRows, err := s.queries.ListActiveStudentSchedules(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 
-	attendanceSessions, err := listAllAttendanceSessions(ctx, s.pool)
+	attendanceSessionRows, err := s.queries.ListActiveAttendanceSessions(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, nil, err
 	}
 
-	attendanceRecords, err := listAllAttendanceRecords(ctx, s.pool)
+	attendanceRecordRows, err := s.queries.ListActiveAttendanceRecords(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, nil, nil, err
+	}
+
+	clubs := make([]sync.ClubRecord, 0, len(clubRows))
+	for _, row := range clubRows {
+		clubs = append(clubs, clubRecordFromRow(row))
+	}
+
+	clubGroups := make([]sync.ClubGroupRecord, 0, len(clubGroupRows))
+	for _, row := range clubGroupRows {
+		clubGroups = append(clubGroups, clubGroupRecordFromRow(row))
+	}
+
+	clubSchedules := make([]sync.ClubScheduleRecord, 0, len(clubScheduleRows))
+	for _, row := range clubScheduleRows {
+		clubSchedules = append(clubSchedules, clubScheduleRecordFromRow(row))
+	}
+
+	beltRanks := make([]sync.BeltRankRecord, 0, len(beltRankRows))
+	for _, row := range beltRankRows {
+		beltRanks = append(beltRanks, beltRankRecordFromRow(row))
+	}
+
+	students := make([]sync.StudentRecord, 0, len(studentRows))
+	for _, row := range studentRows {
+		students = append(students, studentRecordFromRow(row))
+	}
+
+	studentScheduleProfiles := make([]sync.StudentScheduleProfileRecord, 0, len(studentScheduleProfileRows))
+	for _, row := range studentScheduleProfileRows {
+		studentScheduleProfiles = append(studentScheduleProfiles, studentScheduleProfileRecordFromRow(row))
+	}
+
+	studentSchedules := make([]sync.StudentScheduleRecord, 0, len(studentScheduleRows))
+	for _, row := range studentScheduleRows {
+		studentSchedules = append(studentSchedules, studentScheduleRecordFromRow(row))
+	}
+
+	attendanceSessions := make([]sync.AttendanceSessionRecord, 0, len(attendanceSessionRows))
+	for _, row := range attendanceSessionRows {
+		attendanceSessions = append(attendanceSessions, attendanceSessionRecordFromRow(row))
+	}
+
+	attendanceRecords := make([]sync.AttendanceRecord, 0, len(attendanceRecordRows))
+	for _, row := range attendanceRecordRows {
+		attendanceRecords = append(attendanceRecords, attendanceRecordFromRow(row))
 	}
 
 	return clubs, clubGroups, clubSchedules, beltRanks, students, studentScheduleProfiles, studentSchedules, attendanceSessions, attendanceRecords, nil

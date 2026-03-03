@@ -7,6 +7,7 @@ Go backend cho sync layer cua PQQ.
 - Gin
 - PostgreSQL
 - pgx
+- sqlc-ready typed query layer
 - Gorilla WebSocket
 
 ## Endpoints
@@ -39,12 +40,37 @@ Neu muon chay tay khong hot reload:
 go run ./cmd/server
 ```
 
+## SQL access strategy
+
+- Write path cua sync van dung raw SQL trong `internal/postgres/store.go`
+  - ly do: logic canonical sync, upsert, change log va conflict handling dang rat custom
+- Read path on dinh da duoc dua sang typed query package o `internal/postgres/db`
+  - package nay duoc to chuc theo shape `sqlc` generate
+  - source of truth cho schema/query nam o:
+    - `sqlc.yaml`
+    - `internal/postgres/sqlc/schema.sql`
+    - `internal/postgres/sqlc/queries.sql`
+
+Neu may da cai `sqlc`, workflow la:
+
+```bash
+sqlc generate
+```
+
+Hien tai repo da commit san package typed query de khong phu thuoc vao viec cai `sqlc` moi build duoc.
+
 ## Ghi chu
 
 - Domain tables:
   - `clubs`
+  - `club_groups`
+  - `club_schedules`
   - `belt_ranks`
   - `students`
+  - `student_schedule_profiles`
+  - `student_schedules`
+  - `attendance_sessions`
+  - `attendance_records`
 - Sync support tables:
   - `sync_processed_mutations`
   - `sync_counters`
