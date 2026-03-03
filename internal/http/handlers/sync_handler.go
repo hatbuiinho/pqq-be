@@ -67,6 +67,35 @@ func (h *SyncHandler) ImportClubs(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *SyncHandler) ImportStudents(c *gin.Context) {
+	file, _, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		return
+	}
+	defer file.Close()
+
+	response, err := h.service.ImportStudents(c.Request.Context(), file)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *SyncHandler) DownloadStudentImportTemplate(c *gin.Context) {
+	file, err := h.service.GenerateStudentImportTemplate()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", `attachment; filename="students-import-template.xlsx"`)
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", file)
+}
+
 func (h *SyncHandler) Pull(c *gin.Context) {
 	limit := 200
 	if rawLimit := c.Query("limit"); rawLimit != "" {

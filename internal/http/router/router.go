@@ -28,6 +28,8 @@ func New(
 		api.GET("/sync/rebase", syncHandler.Rebase)
 		api.POST("/clubs/import", syncHandler.ImportClubs)
 		api.POST("/belt-ranks/import", syncHandler.ImportBeltRanks)
+		api.POST("/students/import", syncHandler.ImportStudents)
+		api.GET("/students/import-template", syncHandler.DownloadStudentImportTemplate)
 		api.GET("/sync/ws", realtimeHandler.ServeWS)
 	}
 

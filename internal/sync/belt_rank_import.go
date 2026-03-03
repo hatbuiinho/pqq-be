@@ -185,7 +185,7 @@ func resolveBeltRankImportColumns(headerRow []string) (beltRankImportColumns, er
 func parseBeltRankImportRows(rows [][]string, columns beltRankImportColumns) ([]beltRankImportRow, []BeltRankImportRowError) {
 	parsedRows := make([]beltRankImportRow, 0, len(rows))
 	errors := make([]BeltRankImportRowError, 0)
-	seenIDs := make(map[string]int)
+	seenNames := make(map[string]int)
 	seenOrders := make(map[int]int)
 
 	for index, row := range rows {
@@ -206,8 +206,9 @@ func parseBeltRankImportRows(rows [][]string, columns beltRankImportColumns) ([]
 			continue
 		}
 
+		normalizedName := NormalizeSearchText(name)
 		id := normalizeBeltRankID(name)
-		if previousRow, exists := seenIDs[id]; exists {
+		if previousRow, exists := seenNames[normalizedName]; exists {
 			errors = append(errors, BeltRankImportRowError{
 				Row:     rowNumber,
 				Message: fmt.Sprintf("Duplicate belt rank name in file (same as row %d).", previousRow),
@@ -234,7 +235,7 @@ func parseBeltRankImportRows(rows [][]string, columns beltRankImportColumns) ([]
 			continue
 		}
 
-		seenIDs[id] = rowNumber
+		seenNames[normalizedName] = rowNumber
 		seenOrders[order] = rowNumber
 		parsedRows = append(parsedRows, beltRankImportRow{
 			rowNumber:   rowNumber,
@@ -251,6 +252,11 @@ func parseBeltRankImportRows(rows [][]string, columns beltRankImportColumns) ([]
 
 func normalizeImportHeader(value string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(value), "_", ""), " ", ""))
+}
+
+func NormalizeSearchText(value string) string {
+	normalized := removeAccents(strings.ToLower(strings.TrimSpace(value)))
+	return strings.Join(strings.Fields(normalized), " ")
 }
 
 func getImportCell(row []string, index int) string {
@@ -336,7 +342,7 @@ func readFirstWorksheetRows(workbook *excelize.File) ([][]string, error) {
 }
 
 func normalizeSlug(value string) string {
-	normalized := removeAccents(strings.ToLower(strings.TrimSpace(value)))
+	normalized := NormalizeSearchText(value)
 	normalized = nonSlugPattern.ReplaceAllString(normalized, "-")
 	normalized = strings.Trim(normalized, "-")
 	return normalized

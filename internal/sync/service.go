@@ -12,6 +12,7 @@ import (
 )
 
 var studentCodePattern = regexp.MustCompile(`^PQQ-\d{6}$`)
+var weekdayPattern = regexp.MustCompile(`^(mon|tue|wed|thu|fri|sat|sun)$`)
 
 type Service struct {
 	store Store
@@ -158,16 +159,22 @@ func (s *Service) Pull(ctx context.Context, request PullRequest) (PullResponse, 
 }
 
 func (s *Service) Rebase(ctx context.Context) (RebaseResponse, error) {
-	clubs, beltRanks, students, err := s.store.ListAllCurrent(ctx)
+	clubs, clubGroups, clubSchedules, beltRanks, students, studentScheduleProfiles, studentSchedules, attendanceSessions, attendanceRecords, err := s.store.ListAllCurrent(ctx)
 	if err != nil {
 		return RebaseResponse{}, err
 	}
 
 	return RebaseResponse{
-		ServerTime: time.Now().UTC().Format(time.RFC3339Nano),
-		Clubs:      clubs,
-		BeltRanks:  beltRanks,
-		Students:   students,
+		ServerTime:              time.Now().UTC().Format(time.RFC3339Nano),
+		Clubs:                   clubs,
+		ClubGroups:              clubGroups,
+		ClubSchedules:           clubSchedules,
+		BeltRanks:               beltRanks,
+		Students:                students,
+		StudentScheduleProfiles: studentScheduleProfiles,
+		StudentSchedules:        studentSchedules,
+		AttendanceSessions:      attendanceSessions,
+		AttendanceRecords:       attendanceRecords,
 	}, nil
 }
 
@@ -185,6 +192,88 @@ func (s *Service) canonicalizeMutation(
 		}
 		if record.Name == "" {
 			return nil, nil, errors.New("club name is required")
+		}
+		record.ID = mutation.RecordID
+		record.UpdatedAt = serverNow
+		record.LastModifiedAt = serverNow
+		record.SyncStatus = "synced"
+		if record.CreatedAt == "" {
+			record.CreatedAt = serverNow
+		}
+		if mutation.Operation == OperationDelete {
+			record.DeletedAt = stringPtr(serverNow)
+		}
+		payload, err := json.Marshal(record)
+		return payload, record.DeletedAt, err
+	case EntityClubGroups:
+		var record ClubGroupRecord
+		if err := json.Unmarshal(mutation.Record, &record); err != nil {
+			return nil, nil, err
+		}
+		if record.Name == "" {
+			return nil, nil, errors.New("club group name is required")
+		}
+		if record.ClubID == "" {
+			return nil, nil, errors.New("club group clubId is required")
+		}
+		clubExists, err := s.store.RecordExists(ctx, tx, EntityClubs, record.ClubID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !clubExists {
+			return nil, nil, conflictError{reason: "foreign_key_missing", message: "Club does not exist."}
+		}
+		duplicated, err := s.store.FindClubGroupByName(ctx, tx, record.ClubID, record.Name, mutation.RecordID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if duplicated != nil {
+			return nil, nil, conflictError{
+				reason:       "duplicate_value",
+				message:      "Group name already exists in this club.",
+				serverRecord: duplicated.Payload,
+			}
+		}
+		record.ID = mutation.RecordID
+		record.UpdatedAt = serverNow
+		record.LastModifiedAt = serverNow
+		record.SyncStatus = "synced"
+		if record.CreatedAt == "" {
+			record.CreatedAt = serverNow
+		}
+		if mutation.Operation == OperationDelete {
+			record.DeletedAt = stringPtr(serverNow)
+		}
+		payload, err := json.Marshal(record)
+		return payload, record.DeletedAt, err
+	case EntityClubSchedules:
+		var record ClubScheduleRecord
+		if err := json.Unmarshal(mutation.Record, &record); err != nil {
+			return nil, nil, err
+		}
+		if record.ClubID == "" {
+			return nil, nil, errors.New("club schedule clubId is required")
+		}
+		if !weekdayPattern.MatchString(record.Weekday) {
+			return nil, nil, errors.New("club schedule weekday is invalid")
+		}
+		clubExists, err := s.store.RecordExists(ctx, tx, EntityClubs, record.ClubID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !clubExists {
+			return nil, nil, conflictError{reason: "foreign_key_missing", message: "Club does not exist."}
+		}
+		duplicated, err := s.store.FindClubScheduleByWeekday(ctx, tx, record.ClubID, record.Weekday, mutation.RecordID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if duplicated != nil {
+			return nil, nil, conflictError{
+				reason:       "duplicate_value",
+				message:      "Club training day already exists.",
+				serverRecord: duplicated.Payload,
+			}
 		}
 		record.ID = mutation.RecordID
 		record.UpdatedAt = serverNow
@@ -252,6 +341,16 @@ func (s *Service) canonicalizeMutation(
 			return nil, nil, conflictError{reason: "foreign_key_missing", message: "Club does not exist."}
 		}
 
+		if record.GroupID != nil && *record.GroupID != "" {
+			groupExists, err := s.store.RecordExists(ctx, tx, EntityClubGroups, *record.GroupID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !groupExists {
+				return nil, nil, conflictError{reason: "foreign_key_missing", message: "Group does not exist."}
+			}
+		}
+
 		beltRankExists, err := s.store.RecordExists(ctx, tx, EntityBeltRanks, record.BeltRankID)
 		if err != nil {
 			return nil, nil, err
@@ -282,6 +381,165 @@ func (s *Service) canonicalizeMutation(
 			}
 		}
 
+		record.ID = mutation.RecordID
+		record.UpdatedAt = serverNow
+		record.LastModifiedAt = serverNow
+		record.SyncStatus = "synced"
+		if record.CreatedAt == "" {
+			record.CreatedAt = serverNow
+		}
+		if mutation.Operation == OperationDelete {
+			record.DeletedAt = stringPtr(serverNow)
+		}
+		payload, err := json.Marshal(record)
+		return payload, record.DeletedAt, err
+	case EntityStudentScheduleProfiles:
+		var record StudentScheduleProfileRecord
+		if err := json.Unmarshal(mutation.Record, &record); err != nil {
+			return nil, nil, err
+		}
+		if record.StudentID == "" {
+			return nil, nil, errors.New("student schedule profile studentId is required")
+		}
+		if record.Mode != "inherit" && record.Mode != "custom" {
+			return nil, nil, errors.New("student schedule profile mode is invalid")
+		}
+		studentExists, err := s.store.RecordExists(ctx, tx, EntityStudents, record.StudentID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !studentExists {
+			return nil, nil, conflictError{reason: "foreign_key_missing", message: "Student does not exist."}
+		}
+		record.ID = mutation.RecordID
+		record.UpdatedAt = serverNow
+		record.LastModifiedAt = serverNow
+		record.SyncStatus = "synced"
+		if record.CreatedAt == "" {
+			record.CreatedAt = serverNow
+		}
+		if mutation.Operation == OperationDelete {
+			record.DeletedAt = stringPtr(serverNow)
+		}
+		payload, err := json.Marshal(record)
+		return payload, record.DeletedAt, err
+	case EntityStudentSchedules:
+		var record StudentScheduleRecord
+		if err := json.Unmarshal(mutation.Record, &record); err != nil {
+			return nil, nil, err
+		}
+		if record.StudentID == "" {
+			return nil, nil, errors.New("student schedule studentId is required")
+		}
+		if !weekdayPattern.MatchString(record.Weekday) {
+			return nil, nil, errors.New("student schedule weekday is invalid")
+		}
+		studentExists, err := s.store.RecordExists(ctx, tx, EntityStudents, record.StudentID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !studentExists {
+			return nil, nil, conflictError{reason: "foreign_key_missing", message: "Student does not exist."}
+		}
+		duplicated, err := s.store.FindStudentScheduleByWeekday(ctx, tx, record.StudentID, record.Weekday, mutation.RecordID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if duplicated != nil {
+			return nil, nil, conflictError{
+				reason:       "duplicate_value",
+				message:      "Student schedule day already exists.",
+				serverRecord: duplicated.Payload,
+			}
+		}
+		record.ID = mutation.RecordID
+		record.UpdatedAt = serverNow
+		record.LastModifiedAt = serverNow
+		record.SyncStatus = "synced"
+		if record.CreatedAt == "" {
+			record.CreatedAt = serverNow
+		}
+		if mutation.Operation == OperationDelete {
+			record.DeletedAt = stringPtr(serverNow)
+		}
+		payload, err := json.Marshal(record)
+		return payload, record.DeletedAt, err
+	case EntityAttendanceSessions:
+		var record AttendanceSessionRecord
+		if err := json.Unmarshal(mutation.Record, &record); err != nil {
+			return nil, nil, err
+		}
+		if record.ClubID == "" {
+			return nil, nil, errors.New("attendance session clubId is required")
+		}
+		if record.SessionDate == "" {
+			return nil, nil, errors.New("attendance session sessionDate is required")
+		}
+		if record.Status != "draft" && record.Status != "completed" {
+			return nil, nil, errors.New("attendance session status is invalid")
+		}
+		clubExists, err := s.store.RecordExists(ctx, tx, EntityClubs, record.ClubID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !clubExists {
+			return nil, nil, conflictError{reason: "foreign_key_missing", message: "Club does not exist."}
+		}
+		record.ID = mutation.RecordID
+		record.UpdatedAt = serverNow
+		record.LastModifiedAt = serverNow
+		record.SyncStatus = "synced"
+		if record.CreatedAt == "" {
+			record.CreatedAt = serverNow
+		}
+		if mutation.Operation == OperationDelete {
+			record.DeletedAt = stringPtr(serverNow)
+		}
+		payload, err := json.Marshal(record)
+		return payload, record.DeletedAt, err
+	case EntityAttendanceRecords:
+		var record AttendanceRecord
+		if err := json.Unmarshal(mutation.Record, &record); err != nil {
+			return nil, nil, err
+		}
+		if record.SessionID == "" {
+			return nil, nil, errors.New("attendance record sessionId is required")
+		}
+		if record.StudentID == "" {
+			return nil, nil, errors.New("attendance record studentId is required")
+		}
+		switch record.AttendanceStatus {
+		case "unmarked", "present", "late", "excused", "absent":
+		default:
+			return nil, nil, errors.New("attendance record status is invalid")
+		}
+		if mutation.Operation != OperationDelete {
+			sessionExists, err := s.store.RecordExists(ctx, tx, EntityAttendanceSessions, record.SessionID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !sessionExists {
+				return nil, nil, conflictError{reason: "foreign_key_missing", message: "Attendance session does not exist."}
+			}
+			studentExists, err := s.store.RecordExists(ctx, tx, EntityStudents, record.StudentID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !studentExists {
+				return nil, nil, conflictError{reason: "foreign_key_missing", message: "Student does not exist."}
+			}
+			duplicated, err := s.store.FindAttendanceRecordBySessionAndStudent(ctx, tx, record.SessionID, record.StudentID, mutation.RecordID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if duplicated != nil {
+				return nil, nil, conflictError{
+					reason:       "duplicate_value",
+					message:      "Attendance record already exists for this student in the session.",
+					serverRecord: duplicated.Payload,
+				}
+			}
+		}
 		record.ID = mutation.RecordID
 		record.UpdatedAt = serverNow
 		record.LastModifiedAt = serverNow

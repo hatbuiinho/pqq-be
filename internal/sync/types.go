@@ -6,9 +6,15 @@ type EntityName string
 type Operation string
 
 const (
-	EntityClubs     EntityName = "clubs"
-	EntityBeltRanks EntityName = "belt_ranks"
-	EntityStudents  EntityName = "students"
+	EntityClubs                   EntityName = "clubs"
+	EntityClubGroups              EntityName = "club_groups"
+	EntityClubSchedules           EntityName = "club_schedules"
+	EntityBeltRanks               EntityName = "belt_ranks"
+	EntityStudents                EntityName = "students"
+	EntityStudentScheduleProfiles EntityName = "student_schedule_profiles"
+	EntityStudentSchedules        EntityName = "student_schedules"
+	EntityAttendanceSessions      EntityName = "attendance_sessions"
+	EntityAttendanceRecords       EntityName = "attendance_records"
 
 	OperationUpsert Operation = "upsert"
 	OperationDelete Operation = "delete"
@@ -69,10 +75,16 @@ type PullResponse struct {
 }
 
 type RebaseResponse struct {
-	ServerTime string           `json:"serverTime"`
-	Clubs      []ClubRecord     `json:"clubs"`
-	BeltRanks  []BeltRankRecord `json:"beltRanks"`
-	Students   []StudentRecord  `json:"students"`
+	ServerTime              string                         `json:"serverTime"`
+	Clubs                   []ClubRecord                   `json:"clubs"`
+	ClubGroups              []ClubGroupRecord              `json:"clubGroups"`
+	ClubSchedules           []ClubScheduleRecord           `json:"clubSchedules"`
+	BeltRanks               []BeltRankRecord               `json:"beltRanks"`
+	Students                []StudentRecord                `json:"students"`
+	StudentScheduleProfiles []StudentScheduleProfileRecord `json:"studentScheduleProfiles"`
+	StudentSchedules        []StudentScheduleRecord        `json:"studentSchedules"`
+	AttendanceSessions      []AttendanceSessionRecord      `json:"attendanceSessions"`
+	AttendanceRecords       []AttendanceRecord             `json:"attendanceRecords"`
 }
 
 type ClubImportRowError struct {
@@ -93,6 +105,16 @@ type BeltRankImportRowError struct {
 type ImportBeltRanksResponse struct {
 	ImportedCount int                      `json:"importedCount"`
 	Errors        []BeltRankImportRowError `json:"errors"`
+}
+
+type StudentImportRowError struct {
+	Row     int    `json:"row"`
+	Message string `json:"message"`
+}
+
+type ImportStudentsResponse struct {
+	ImportedCount int                     `json:"importedCount"`
+	Errors        []StudentImportRowError `json:"errors"`
 }
 
 type RealtimeEvent struct {
@@ -131,6 +153,21 @@ type BeltRankRecord struct {
 	IsActive    bool    `json:"isActive"`
 }
 
+type ClubGroupRecord struct {
+	BaseRecord
+	ClubID      string  `json:"clubId"`
+	Name        string  `json:"name"`
+	Description *string `json:"description,omitempty"`
+	IsActive    bool    `json:"isActive"`
+}
+
+type ClubScheduleRecord struct {
+	BaseRecord
+	ClubID   string `json:"clubId"`
+	Weekday  string `json:"weekday"`
+	IsActive bool   `json:"isActive"`
+}
+
 type StudentRecord struct {
 	BaseRecord
 	StudentCode *string `json:"studentCode,omitempty"`
@@ -141,10 +178,41 @@ type StudentRecord struct {
 	Email       *string `json:"email,omitempty"`
 	Address     *string `json:"address,omitempty"`
 	ClubID      string  `json:"clubId"`
+	GroupID     *string `json:"groupId,omitempty"`
 	BeltRankID  string  `json:"beltRankId"`
 	JoinedAt    *string `json:"joinedAt,omitempty"`
 	Status      string  `json:"status"`
 	Notes       *string `json:"notes,omitempty"`
+}
+
+type StudentScheduleProfileRecord struct {
+	BaseRecord
+	StudentID string `json:"studentId"`
+	Mode      string `json:"mode"`
+}
+
+type StudentScheduleRecord struct {
+	BaseRecord
+	StudentID string `json:"studentId"`
+	Weekday   string `json:"weekday"`
+	IsActive  bool   `json:"isActive"`
+}
+
+type AttendanceSessionRecord struct {
+	BaseRecord
+	ClubID      string  `json:"clubId"`
+	SessionDate string  `json:"sessionDate"`
+	Status      string  `json:"status"`
+	Notes       *string `json:"notes,omitempty"`
+}
+
+type AttendanceRecord struct {
+	BaseRecord
+	SessionID         string  `json:"sessionId"`
+	StudentID         string  `json:"studentId"`
+	AttendanceStatus  string  `json:"attendanceStatus"`
+	CheckInAt         *string `json:"checkInAt,omitempty"`
+	Notes             *string `json:"notes,omitempty"`
 }
 
 type StoredRecord struct {

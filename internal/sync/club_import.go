@@ -189,7 +189,7 @@ func resolveClubImportColumns(headerRow []string) (clubImportColumns, error) {
 func parseClubImportRows(rows [][]string, columns clubImportColumns) ([]clubImportRow, []ClubImportRowError) {
 	parsedRows := make([]clubImportRow, 0, len(rows))
 	parseErrors := make([]ClubImportRowError, 0)
-	seenIDs := make(map[string]int)
+	seenNames := make(map[string]int)
 
 	for index, row := range rows {
 		rowNumber := index + 2
@@ -203,8 +203,9 @@ func parseClubImportRows(rows [][]string, columns clubImportColumns) ([]clubImpo
 			continue
 		}
 
+		normalizedName := NormalizeSearchText(name)
 		id := normalizeClubID(name)
-		if previousRow, exists := seenIDs[id]; exists {
+		if previousRow, exists := seenNames[normalizedName]; exists {
 			parseErrors = append(parseErrors, ClubImportRowError{
 				Row:     rowNumber,
 				Message: fmt.Sprintf("Duplicate club name in file (same as row %d).", previousRow),
@@ -230,7 +231,7 @@ func parseClubImportRows(rows [][]string, columns clubImportColumns) ([]clubImpo
 			continue
 		}
 
-		seenIDs[id] = rowNumber
+		seenNames[normalizedName] = rowNumber
 		parsedRows = append(parsedRows, clubImportRow{
 			rowNumber: rowNumber,
 			id:        id,
