@@ -6,25 +6,38 @@ import (
 
 	"pqq/be/internal/postgres/db"
 	"pqq/be/internal/sync"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
-func formatTimestamp(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
+func formatTimestamp(value pgtype.Timestamptz) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.Time.UTC().Format(time.RFC3339Nano)
 }
 
-func formatDatePtr(value *time.Time) *string {
-	if value == nil {
+func textPtr(value pgtype.Text) *string {
+	if !value.Valid {
 		return nil
 	}
-	formatted := value.UTC().Format("2006-01-02")
+	text := value.String
+	return &text
+}
+
+func formatDatePtr(value pgtype.Date) *string {
+	if !value.Valid {
+		return nil
+	}
+	formatted := value.Time.UTC().Format("2006-01-02")
 	return &formatted
 }
 
-func formatTimestampPtr(value *time.Time) *string {
-	if value == nil {
+func formatTimestampPtr(value pgtype.Timestamptz) *string {
+	if !value.Valid {
 		return nil
 	}
-	formatted := value.UTC().Format(time.RFC3339Nano)
+	formatted := value.Time.UTC().Format(time.RFC3339Nano)
 	return &formatted
 }
 
@@ -38,12 +51,12 @@ func clubRecordFromRow(row db.Club) sync.ClubRecord {
 			DeletedAt:      formatTimestampPtr(row.DeletedAt),
 			SyncStatus:     "synced",
 		},
-		Code:     row.Code,
+		Code:     textPtr(row.Code),
 		Name:     row.Name,
-		Phone:    row.Phone,
-		Email:    row.Email,
-		Address:  row.Address,
-		Notes:    row.Notes,
+		Phone:    textPtr(row.Phone),
+		Email:    textPtr(row.Email),
+		Address:  textPtr(row.Address),
+		Notes:    textPtr(row.Notes),
 		IsActive: row.IsActive,
 	}
 }
@@ -60,7 +73,7 @@ func clubGroupRecordFromRow(row db.ClubGroup) sync.ClubGroupRecord {
 		},
 		ClubID:      row.ClubID,
 		Name:        row.Name,
-		Description: row.Description,
+		Description: textPtr(row.Description),
 		IsActive:    row.IsActive,
 	}
 }
@@ -93,7 +106,7 @@ func beltRankRecordFromRow(row db.BeltRank) sync.BeltRankRecord {
 		},
 		Name:        row.Name,
 		Order:       int(row.RankOrder),
-		Description: row.Description,
+		Description: textPtr(row.Description),
 		IsActive:    row.IsActive,
 	}
 }
@@ -108,19 +121,19 @@ func studentRecordFromRow(row db.Student) sync.StudentRecord {
 			DeletedAt:      formatTimestampPtr(row.DeletedAt),
 			SyncStatus:     "synced",
 		},
-		StudentCode: row.StudentCode,
+		StudentCode: textPtr(row.StudentCode),
 		FullName:    row.FullName,
 		DateOfBirth: formatDatePtr(row.DateOfBirth),
-		Gender:      row.Gender,
-		Phone:       row.Phone,
-		Email:       row.Email,
-		Address:     row.Address,
+		Gender:      textPtr(row.Gender),
+		Phone:       textPtr(row.Phone),
+		Email:       textPtr(row.Email),
+		Address:     textPtr(row.Address),
 		ClubID:      row.ClubID,
-		GroupID:     row.GroupID,
+		GroupID:     textPtr(row.GroupID),
 		BeltRankID:  row.BeltRankID,
 		JoinedAt:    formatDatePtr(row.JoinedAt),
 		Status:      row.Status,
-		Notes:       row.Notes,
+		Notes:       textPtr(row.Notes),
 	}
 }
 
@@ -166,9 +179,9 @@ func attendanceSessionRecordFromRow(row db.AttendanceSession) sync.AttendanceSes
 			SyncStatus:     "synced",
 		},
 		ClubID:      row.ClubID,
-		SessionDate: row.SessionDate.UTC().Format("2006-01-02"),
+		SessionDate: row.SessionDate.Time.UTC().Format("2006-01-02"),
 		Status:      row.Status,
-		Notes:       row.Notes,
+		Notes:       textPtr(row.Notes),
 	}
 }
 
@@ -186,7 +199,7 @@ func attendanceRecordFromRow(row db.AttendanceRecord) sync.AttendanceRecord {
 		StudentID:        row.StudentID,
 		AttendanceStatus: row.AttendanceStatus,
 		CheckInAt:        formatTimestampPtr(row.CheckInAt),
-		Notes:            row.Notes,
+		Notes:            textPtr(row.Notes),
 	}
 }
 

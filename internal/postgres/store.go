@@ -12,6 +12,7 @@ import (
 	"pqq/be/internal/sync"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -208,8 +209,11 @@ func (s *SyncStore) FindClubByCode(
 	excludeID string,
 ) (*sync.StoredRecord, error) {
 	row, err := s.queries.WithTx(tx).FindActiveClubByCode(ctx, db.FindActiveClubByCodeParams{
-		ExcludeID: excludeID,
-		Code:      clubCode,
+		ID: excludeID,
+		Code: pgtype.Text{
+			String: clubCode,
+			Valid:  true,
+		},
 	})
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -276,9 +280,9 @@ func (s *SyncStore) FindClubScheduleByWeekday(
 	excludeID string,
 ) (*sync.StoredRecord, error) {
 	row, err := s.queries.WithTx(tx).FindActiveClubScheduleByWeekday(ctx, db.FindActiveClubScheduleByWeekdayParams{
-		ExcludeID: excludeID,
-		ClubID:    clubID,
-		Weekday:   weekday,
+		ID:      excludeID,
+		ClubID:  clubID,
+		Weekday: weekday,
 	})
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -297,7 +301,7 @@ func (s *SyncStore) FindBeltRankByOrder(
 	excludeID string,
 ) (*sync.StoredRecord, error) {
 	row, err := s.queries.WithTx(tx).FindActiveBeltRankByOrder(ctx, db.FindActiveBeltRankByOrderParams{
-		ExcludeID: excludeID,
+		ID:        excludeID,
 		RankOrder: int32(order),
 	})
 	if err != nil {
@@ -339,8 +343,11 @@ func (s *SyncStore) FindStudentByCode(
 	excludeID string,
 ) (*sync.StoredRecord, error) {
 	row, err := s.queries.WithTx(tx).FindActiveStudentByCode(ctx, db.FindActiveStudentByCodeParams{
-		ExcludeID:   excludeID,
-		StudentCode: studentCode,
+		ID: excludeID,
+		StudentCode: pgtype.Text{
+			String: studentCode,
+			Valid:  true,
+		},
 	})
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -361,7 +368,7 @@ func (s *SyncStore) FindStudentScheduleByWeekday(
 	excludeID string,
 ) (*sync.StoredRecord, error) {
 	row, err := s.queries.WithTx(tx).FindActiveStudentScheduleByWeekday(ctx, db.FindActiveStudentScheduleByWeekdayParams{
-		ExcludeID: excludeID,
+		ID:        excludeID,
 		StudentID: studentID,
 		Weekday:   weekday,
 	})
@@ -383,7 +390,7 @@ func (s *SyncStore) FindAttendanceRecordBySessionAndStudent(
 	excludeID string,
 ) (*sync.StoredRecord, error) {
 	row, err := s.queries.WithTx(tx).FindActiveAttendanceRecordBySessionAndStudent(ctx, db.FindActiveAttendanceRecordBySessionAndStudentParams{
-		ExcludeID: excludeID,
+		ID:        excludeID,
 		SessionID: sessionID,
 		StudentID: studentID,
 	})

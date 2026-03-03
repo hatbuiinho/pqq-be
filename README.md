@@ -28,10 +28,10 @@ Go backend cho sync layer cua PQQ.
 go mod tidy
 ```
 
-4. Chay server dev voi `air`:
+4. Chay server dev:
 
 ```bash
-air
+make dev
 ```
 
 Neu muon chay tay khong hot reload:
@@ -54,10 +54,19 @@ go run ./cmd/server
 Neu may da cai `sqlc`, workflow la:
 
 ```bash
-sqlc generate
+make sqlc
 ```
 
 Hien tai repo da commit san package typed query de khong phu thuoc vao viec cai `sqlc` moi build duoc.
+
+## Make targets
+
+```bash
+make sqlc   # generate sqlc code + gofmt + compile test
+make dev    # run backend with air
+make test   # run go test with local GOCACHE
+make fmt    # gofmt cmd and internal packages
+```
 
 ## Ghi chu
 
