@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"strings"
 
 	"pqq/be/internal/config"
 	"pqq/be/internal/http/handlers"
@@ -47,13 +48,24 @@ func New(
 }
 
 func corsMiddleware(allowedOrigin string) gin.HandlerFunc {
+	allowedOrigins := parseAllowedOrigins(allowedOrigin)
+	allowAll := len(allowedOrigins) == 1 && allowedOrigins[0] == "*"
+
 	return func(c *gin.Context) {
-		if allowedOrigin != "" {
-			c.Header("Access-Control-Allow-Origin", allowedOrigin)
+		requestOrigin := c.GetHeader("Origin")
+		if requestOrigin != "" {
+			if allowAll {
+				c.Header("Access-Control-Allow-Origin", "*")
+			} else if isAllowedOrigin(requestOrigin, allowedOrigins) {
+				c.Header("Access-Control-Allow-Origin", requestOrigin)
+				c.Header("Vary", "Origin")
+			}
 		}
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		c.Header("Access-Control-Allow-Credentials", "true")
+		if !allowAll {
+			c.Header("Access-Control-Allow-Credentials", "true")
+		}
 
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
@@ -62,4 +74,31 @@ func corsMiddleware(allowedOrigin string) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func parseAllowedOrigins(value string) []string {
+	parts := strings.Split(value, ",")
+	origins := make([]string, 0, len(parts))
+	for _, part := range parts {
+		origin := strings.TrimSpace(part)
+		if origin == "" {
+			continue
+		}
+		origins = append(origins, origin)
+	}
+
+	if len(origins) == 0 {
+		return []string{"*"}
+	}
+
+	return origins
+}
+
+func isAllowedOrigin(origin string, allowedOrigins []string) bool {
+	for _, allowed := range allowedOrigins {
+		if allowed == origin {
+			return true
+		}
+	}
+	return false
 }
