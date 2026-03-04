@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: pqq-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: pqq
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pqq_postgres_data:/var/lib/postgresql/data
+    networks:
+      - nginx_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pqq"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - with-postgres
+
+  be:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pqq-be
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    networks:
+      - nginx_network
+
+volumes:
+  pqq_postgres_data:
+
+networks:
+  nginx_network:
+    external: true

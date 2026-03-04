@@ -41,6 +41,48 @@ Neu muon chay tay khong hot reload:
 go run ./cmd/server
 ```
 
+## Chay bang Docker Compose
+
+Backend da co san:
+
+- [Dockerfile](/Users/hatbuinho/Documents/TTPQ/PQQ/be/Dockerfile)
+- [docker-compose.yml](/Users/hatbuinho/Documents/TTPQ/PQQ/be/docker-compose.yml)
+
+Compose se khoi tao:
+
+- `be` (restart always, doc toan bo env tu `.env`)
+- `postgres` la service optional (profile `with-postgres`)
+
+Luu y:
+
+- `be` doc toan bo bien tu `.env` qua `env_file` (khong override trong compose).
+- Neu dang dung PostgreSQL ngoai, dat `DATABASE_URL` trong `.env` theo host do.
+- Neu muon dung PostgreSQL noi bo compose sau nay, dat `DATABASE_URL=postgres://postgres:postgres@postgres:5432/pqq?sslmode=disable` va chay kem profile `with-postgres`.
+
+Chay:
+
+```bash
+docker compose up -d --build
+```
+
+Chay kem PostgreSQL noi bo:
+
+```bash
+docker compose --profile with-postgres up -d --build
+```
+
+Xem log:
+
+```bash
+docker compose logs -f be
+```
+
+Dung:
+
+```bash
+docker compose down
+```
+
 ## SQL access strategy
 
 - Write path cua sync van dung raw SQL trong `internal/postgres/store.go`
