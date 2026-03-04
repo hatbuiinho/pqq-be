@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -12,6 +13,19 @@ type Config struct {
 	DatabaseURL   string
 	AllowedOrigin string
 	PullLimit     int
+	Storage       StorageConfig
+}
+
+type StorageConfig struct {
+	Enabled              bool
+	Endpoint             string
+	AccessKey            string
+	SecretKey            string
+	Bucket               string
+	Region               string
+	UseSSL               bool
+	PublicBaseURL        string
+	PresignExpiryMinutes int
 }
 
 func Load() Config {
@@ -22,6 +36,17 @@ func Load() Config {
 		DatabaseURL:   getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/pqq?sslmode=disable"),
 		AllowedOrigin: getEnv("ALLOWED_ORIGIN", "*"),
 		PullLimit:     200,
+		Storage: StorageConfig{
+			Enabled:              getBoolEnv("MINIO_ENABLED", false),
+			Endpoint:             getEnv("MINIO_ENDPOINT", ""),
+			AccessKey:            getEnv("MINIO_ACCESS_KEY", ""),
+			SecretKey:            getEnv("MINIO_SECRET_KEY", ""),
+			Bucket:               getEnv("MINIO_BUCKET", ""),
+			Region:               getEnv("MINIO_REGION", "us-east-1"),
+			UseSSL:               getBoolEnv("MINIO_USE_SSL", true),
+			PublicBaseURL:        getEnv("MINIO_PUBLIC_BASE_URL", ""),
+			PresignExpiryMinutes: getIntEnv("MINIO_PRESIGN_EXPIRY_MINUTES", 15),
+		},
 	}
 }
 
@@ -31,6 +56,36 @@ func getEnv(key string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getBoolEnv(key string, fallback bool) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+
+	switch value {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func getIntEnv(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+
+	return parsed
 }
 
 func loadDotEnv(path string) {

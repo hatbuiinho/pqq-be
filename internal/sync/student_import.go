@@ -88,12 +88,18 @@ func (s *Service) ImportStudents(ctx context.Context, file io.Reader) (ImportStu
 	changedIDs := make([]string, 0, len(parsedRows)*3)
 
 	for _, row := range parsedRows {
-		clubRecord, err := s.store.FindClubByName(ctx, tx, row.clubName)
+		clubRecord, err := s.store.FindClubByCode(ctx, tx, row.clubName, "")
 		if err != nil {
 			return ImportStudentsResponse{}, err
 		}
 		if clubRecord == nil {
-			rowErrors = append(rowErrors, StudentImportRowError{Row: row.rowNumber, Message: "Club does not exist."})
+			clubRecord, err = s.store.FindClubByName(ctx, tx, row.clubName)
+			if err != nil {
+				return ImportStudentsResponse{}, err
+			}
+		}
+		if clubRecord == nil {
+			rowErrors = append(rowErrors, StudentImportRowError{Row: row.rowNumber, Message: "Club does not exist by code or name."})
 			continue
 		}
 
@@ -142,6 +148,15 @@ func (s *Service) ImportStudents(ctx context.Context, file io.Reader) (ImportStu
 			}
 		}
 
+		studentCode := row.studentCode
+		if studentCode == nil || *studentCode == "" {
+			generatedCode, err := s.store.NextStudentCode(ctx, tx)
+			if err != nil {
+				return ImportStudentsResponse{}, err
+			}
+			studentCode = &generatedCode
+		}
+
 		record := StudentRecord{
 			BaseRecord: BaseRecord{
 				ID:             recordID,
@@ -150,7 +165,7 @@ func (s *Service) ImportStudents(ctx context.Context, file io.Reader) (ImportStu
 				LastModifiedAt: now,
 				SyncStatus:     "synced",
 			},
-			StudentCode: row.studentCode,
+			StudentCode: studentCode,
 			FullName:    row.fullName,
 			DateOfBirth: row.dateOfBirth,
 			Gender:      row.gender,

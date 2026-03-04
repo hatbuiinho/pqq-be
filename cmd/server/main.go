@@ -9,7 +9,9 @@ import (
 	"pqq/be/internal/config"
 	httpHandlers "pqq/be/internal/http/handlers"
 	"pqq/be/internal/http/router"
+	"pqq/be/internal/media"
 	"pqq/be/internal/postgres"
+	"pqq/be/internal/storage"
 	"pqq/be/internal/sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,14 +37,34 @@ func main() {
 		log.Fatalf("ensure schema: %v", err)
 	}
 
+	var storageService *storage.MinIOService
+	if cfg.Storage.Enabled {
+		storageService, err = storage.NewMinIOService(cfg.Storage)
+		if err != nil {
+			log.Fatalf("create minio service: %v", err)
+		}
+
+		if err := storageService.EnsureBucket(ctx); err != nil {
+			log.Fatalf("ensure minio bucket: %v", err)
+		}
+
+		log.Printf("minio storage ready: endpoint=%s bucket=%s", cfg.Storage.Endpoint, storageService.Bucket())
+	}
+
 	store := postgres.NewSyncStore(pool)
 	hub := sync.NewHub()
 	service := sync.NewService(store, hub)
+	var studentMediaHandler *httpHandlers.StudentMediaHandler
 
 	syncHandler := httpHandlers.NewSyncHandler(service)
 	wsHandler := httpHandlers.NewRealtimeHandler(hub)
+	if storageService != nil {
+		mediaStore := media.NewStore(pool)
+		mediaService := media.NewService(mediaStore, storageService, cfg.Storage.PresignExpiryMinutes)
+		studentMediaHandler = httpHandlers.NewStudentMediaHandler(mediaService)
+	}
 
-	engine := router.New(cfg, syncHandler, wsHandler)
+	engine := router.New(cfg, syncHandler, wsHandler, studentMediaHandler)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,

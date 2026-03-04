@@ -8,6 +8,7 @@ Go backend cho sync layer cua PQQ.
 - PostgreSQL
 - pgx
 - sqlc-ready typed query layer
+- MinIO object storage
 - Gorilla WebSocket
 
 ## Endpoints
@@ -67,6 +68,37 @@ make dev    # run backend with air
 make test   # run go test with local GOCACHE
 make fmt    # gofmt cmd and internal packages
 ```
+
+## MinIO storage
+
+Backend da co storage service cho MinIO o:
+
+- [internal/storage/minio.go](/Users/hatbuinho/Documents/TTPQ/PQQ/be/internal/storage/minio.go)
+
+Env can dung:
+
+```bash
+MINIO_ENABLED=true
+MINIO_ENDPOINT=minio-api.hatbuinho.me
+MINIO_ACCESS_KEY=...
+MINIO_SECRET_KEY=...
+MINIO_BUCKET=pqq-media
+MINIO_REGION=us-east-1
+MINIO_USE_SSL=true
+MINIO_PUBLIC_BASE_URL=
+MINIO_PRESIGN_EXPIRY_MINUTES=15
+```
+
+Khi `MINIO_ENABLED=true`, server se:
+- khoi tao MinIO client
+- kiem tra bucket ton tai
+- tu tao bucket neu chua co
+
+Storage service da ho tro:
+- upload object
+- presign upload url
+- presign download url
+- delete object
 
 ## Ghi chu
 

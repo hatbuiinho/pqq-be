@@ -13,6 +13,7 @@ func New(
 	cfg config.Config,
 	syncHandler *handlers.SyncHandler,
 	realtimeHandler *handlers.RealtimeHandler,
+	studentMediaHandler *handlers.StudentMediaHandler,
 ) *gin.Engine {
 	engine := gin.New()
 	engine.Use(gin.Recovery(), gin.Logger(), corsMiddleware(cfg.AllowedOrigin))
@@ -31,6 +32,15 @@ func New(
 		api.POST("/students/import", syncHandler.ImportStudents)
 		api.GET("/students/import-template", syncHandler.DownloadStudentImportTemplate)
 		api.GET("/sync/ws", realtimeHandler.ServeWS)
+		if studentMediaHandler != nil {
+			api.GET("/students/:studentId/avatars", studentMediaHandler.ListStudentAvatars)
+			api.POST("/students/:studentId/avatars", studentMediaHandler.UploadStudentAvatar)
+			api.POST("/students/:studentId/avatars/:mediaId/primary", studentMediaHandler.SetPrimaryAvatar)
+			api.POST("/students/:studentId/avatars/:mediaId/delete", studentMediaHandler.DeleteAvatar)
+			api.POST("/media/avatar-imports/analyze", studentMediaHandler.AnalyzeAvatarImport)
+			api.GET("/media/avatar-imports/:batchId", studentMediaHandler.GetAvatarImportBatch)
+			api.POST("/media/avatar-imports/:batchId/confirm", studentMediaHandler.ConfirmAvatarImport)
+		}
 	}
 
 	return engine
