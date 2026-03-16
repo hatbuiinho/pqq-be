@@ -74,7 +74,7 @@ func (s *Service) Push(ctx context.Context, request PushRequest) (PushResponse, 
 			continue
 		}
 
-		canonicalPayload, deletedAt, err := s.canonicalizeMutation(ctx, tx, mutation, now)
+		canonicalPayload, deletedAt, err := s.canonicalizeMutation(ctx, tx, mutation, now, existing)
 		if err != nil {
 			if conflict, ok := err.(conflictError); ok {
 				response.Conflicts = append(response.Conflicts, Conflict{
@@ -183,6 +183,7 @@ func (s *Service) canonicalizeMutation(
 	tx pgx.Tx,
 	mutation SyncMutation,
 	serverNow string,
+	existing *StoredRecord,
 ) ([]byte, *string, error) {
 	switch mutation.EntityName {
 	case EntityClubs:
@@ -478,6 +479,17 @@ func (s *Service) canonicalizeMutation(
 		if record.Status != "draft" && record.Status != "completed" {
 			return nil, nil, errors.New("attendance session status is invalid")
 		}
+		if mutation.Operation != OperationDelete && record.Status == "draft" && existing != nil {
+			var existingRecord AttendanceSessionRecord
+			if err := json.Unmarshal(existing.Payload, &existingRecord); err == nil {
+				if existingRecord.Status == "completed" && existingRecord.SessionDate != rfc3339Date(serverNow) {
+					return nil, nil, conflictError{
+						reason:  "business_rule_violation",
+						message: "Only sessions scheduled for today can be reopened.",
+					}
+				}
+			}
+		}
 		clubExists, err := s.store.RecordExists(ctx, tx, EntityClubs, record.ClubID)
 		if err != nil {
 			return nil, nil, err
@@ -509,7 +521,7 @@ func (s *Service) canonicalizeMutation(
 			return nil, nil, errors.New("attendance record studentId is required")
 		}
 		switch record.AttendanceStatus {
-		case "unmarked", "present", "late", "excused", "absent":
+		case "unmarked", "present", "late", "excused", "left_early", "absent":
 		default:
 			return nil, nil, errors.New("attendance record status is invalid")
 		}
@@ -588,6 +600,17 @@ func (e conflictError) Error() string {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func rfc3339Date(value string) string {
+	if len(value) >= 10 {
+		return value[:10]
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return ""
+	}
+	return parsed.UTC().Format("2006-01-02")
 }
 
 func encodeSyncCursor(serverModifiedAt string, changeID int64) string {
