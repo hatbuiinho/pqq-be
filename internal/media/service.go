@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"image"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -402,7 +401,7 @@ func readAvatarBytes(file io.Reader, declaredSize int64) ([]byte, error) {
 }
 
 func buildAvatarThumbnail(data []byte) ([]byte, error) {
-	source, _, err := image.Decode(bytes.NewReader(data))
+	source, err := imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
 	if err != nil {
 		return nil, errors.New("failed to decode avatar image")
 	}
