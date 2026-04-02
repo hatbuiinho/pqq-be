@@ -619,6 +619,74 @@ func (s *SyncStore) NextStudentCode(ctx context.Context, tx pgx.Tx) (string, err
 	return fmt.Sprintf("PQQ-%06d", value), nil
 }
 
+func (s *SyncStore) FindActiveStudentProfileByCode(
+	ctx context.Context,
+	studentCode string,
+) (*sync.StudentPublicProfile, error) {
+	normalizedCode := strings.TrimSpace(studentCode)
+	if normalizedCode == "" {
+		return nil, nil
+	}
+
+	query := `
+		SELECT
+			s.id,
+			s.student_code,
+			s.full_name,
+			to_char(s.date_of_birth, 'YYYY-MM-DD') AS date_of_birth,
+			s.gender,
+			s.phone,
+			s.email,
+			s.address,
+			s.status,
+			to_char(s.joined_at, 'YYYY-MM-DD') AS joined_at,
+			s.notes,
+			s.club_id,
+			c.name AS club_name,
+			s.group_id,
+			g.name AS group_name,
+			s.belt_rank_id,
+			b.name AS belt_rank_name
+		FROM students s
+		INNER JOIN clubs c ON c.id = s.club_id
+		INNER JOIN belt_ranks b ON b.id = s.belt_rank_id
+		LEFT JOIN club_groups g ON g.id = s.group_id
+		WHERE s.deleted_at IS NULL
+			AND c.deleted_at IS NULL
+			AND b.deleted_at IS NULL
+			AND LOWER(s.student_code) = LOWER($1)
+		LIMIT 1
+	`
+
+	var profile sync.StudentPublicProfile
+	if err := s.pool.QueryRow(ctx, query, normalizedCode).Scan(
+		&profile.ID,
+		&profile.StudentCode,
+		&profile.FullName,
+		&profile.DateOfBirth,
+		&profile.Gender,
+		&profile.Phone,
+		&profile.Email,
+		&profile.Address,
+		&profile.Status,
+		&profile.JoinedAt,
+		&profile.Notes,
+		&profile.ClubID,
+		&profile.ClubName,
+		&profile.GroupID,
+		&profile.GroupName,
+		&profile.BeltRankID,
+		&profile.BeltRank,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &profile, nil
+}
+
 func (s *SyncStore) ListAllCurrent(ctx context.Context) ([]sync.ClubRecord, []sync.ClubGroupRecord, []sync.ClubScheduleRecord, []sync.BeltRankRecord, []sync.StudentRecord, []sync.StudentScheduleProfileRecord, []sync.StudentScheduleRecord, []sync.AttendanceSessionRecord, []sync.AttendanceRecord, error) {
 	clubRows, err := s.queries.ListActiveClubs(ctx)
 	if err != nil {

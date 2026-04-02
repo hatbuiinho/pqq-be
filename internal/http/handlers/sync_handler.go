@@ -96,6 +96,26 @@ func (h *SyncHandler) DownloadStudentImportTemplate(c *gin.Context) {
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", file)
 }
 
+func (h *SyncHandler) GetStudentPublicProfile(c *gin.Context) {
+	studentCode := c.Param("studentCode")
+	if studentCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "studentCode is required"})
+		return
+	}
+
+	profile, err := h.service.GetStudentPublicProfile(c.Request.Context(), studentCode)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if profile == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "student not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, profile)
+}
+
 func (h *SyncHandler) Pull(c *gin.Context) {
 	limit := 200
 	if rawLimit := c.Query("limit"); rawLimit != "" {

@@ -178,6 +178,10 @@ func (s *Service) Rebase(ctx context.Context) (RebaseResponse, error) {
 	}, nil
 }
 
+func (s *Service) GetStudentPublicProfile(ctx context.Context, studentCode string) (*StudentPublicProfile, error) {
+	return s.store.FindActiveStudentProfileByCode(ctx, studentCode)
+}
+
 func (s *Service) canonicalizeMutation(
 	ctx context.Context,
 	tx pgx.Tx,

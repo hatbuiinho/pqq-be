@@ -32,6 +32,7 @@ func New(
 		api.POST("/belt-ranks/import", syncHandler.ImportBeltRanks)
 		api.POST("/students/import", syncHandler.ImportStudents)
 		api.GET("/students/import-template", syncHandler.DownloadStudentImportTemplate)
+		api.GET("/students/public-profile/:studentCode", syncHandler.GetStudentPublicProfile)
 		api.GET("/sync/ws", realtimeHandler.ServeWS)
 		if studentMediaHandler != nil {
 			api.GET("/students/:studentId/avatars", studentMediaHandler.ListStudentAvatars)

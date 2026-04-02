@@ -26,5 +26,6 @@ type Store interface {
 	ReplaceStudentSchedule(ctx context.Context, tx pgx.Tx, studentID string, mode string, weekdays []string, serverNow string) error
 	RecordExists(ctx context.Context, tx pgx.Tx, entityName EntityName, recordID string) (bool, error)
 	NextStudentCode(ctx context.Context, tx pgx.Tx) (string, error)
+	FindActiveStudentProfileByCode(ctx context.Context, studentCode string) (*StudentPublicProfile, error)
 	ListAllCurrent(ctx context.Context) ([]ClubRecord, []ClubGroupRecord, []ClubScheduleRecord, []BeltRankRecord, []StudentRecord, []StudentScheduleProfileRecord, []StudentScheduleRecord, []AttendanceSessionRecord, []AttendanceRecord, error)
 }

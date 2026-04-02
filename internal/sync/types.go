@@ -117,6 +117,26 @@ type ImportStudentsResponse struct {
 	Errors        []StudentImportRowError `json:"errors"`
 }
 
+type StudentPublicProfile struct {
+	ID          string  `json:"id"`
+	StudentCode *string `json:"studentCode,omitempty"`
+	FullName    string  `json:"fullName"`
+	DateOfBirth *string `json:"dateOfBirth,omitempty"`
+	Gender      *string `json:"gender,omitempty"`
+	Phone       *string `json:"phone,omitempty"`
+	Email       *string `json:"email,omitempty"`
+	Address     *string `json:"address,omitempty"`
+	Status      string  `json:"status"`
+	JoinedAt    *string `json:"joinedAt,omitempty"`
+	Notes       *string `json:"notes,omitempty"`
+	ClubID      string  `json:"clubId"`
+	ClubName    string  `json:"clubName"`
+	GroupID     *string `json:"groupId,omitempty"`
+	GroupName   *string `json:"groupName,omitempty"`
+	BeltRankID  string  `json:"beltRankId"`
+	BeltRank    string  `json:"beltRankName"`
+}
+
 type RealtimeEvent struct {
 	Type         string       `json:"type"`
 	ConnectionID string       `json:"connectionId,omitempty"`
@@ -208,11 +228,11 @@ type AttendanceSessionRecord struct {
 
 type AttendanceRecord struct {
 	BaseRecord
-	SessionID         string  `json:"sessionId"`
-	StudentID         string  `json:"studentId"`
-	AttendanceStatus  string  `json:"attendanceStatus"`
-	CheckInAt         *string `json:"checkInAt,omitempty"`
-	Notes             *string `json:"notes,omitempty"`
+	SessionID        string  `json:"sessionId"`
+	StudentID        string  `json:"studentId"`
+	AttendanceStatus string  `json:"attendanceStatus"`
+	CheckInAt        *string `json:"checkInAt,omitempty"`
+	Notes            *string `json:"notes,omitempty"`
 }
 
 type StoredRecord struct {
