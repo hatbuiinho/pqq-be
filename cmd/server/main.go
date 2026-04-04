@@ -15,6 +15,7 @@ import (
 	"pqq/be/internal/storage"
 	"pqq/be/internal/sync"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -24,7 +25,14 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("parse postgres config: %v", err)
+	}
+	// Disable automatic prepared statements to avoid conflicts with poolers such as PgBouncer.
+	poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		log.Fatalf("create postgres pool: %v", err)
 	}

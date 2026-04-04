@@ -3,8 +3,10 @@ package auth
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -329,6 +331,259 @@ func (s *Service) AddMembership(
 	return &membership, nil
 }
 
+func (s *Service) ListClubInvites(
+	ctx context.Context,
+	actorUserID string,
+) (*ListClubInvitesResponse, error) {
+	userRow, err := s.store.FindUserByID(ctx, actorUserID)
+	if err != nil {
+		return nil, err
+	}
+	if userRow == nil || !userRow.IsActive {
+		return nil, errors.New("user does not exist")
+	}
+
+	clubIDs, err := s.accessibleInviteClubIDs(ctx, actorUserID, userRow.SystemRole)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.store.ListClubInvites(ctx, clubIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]ClubInvite, 0, len(rows))
+	for i := range rows {
+		items = append(items, mapClubInvite(&rows[i]))
+	}
+	return &ListClubInvitesResponse{Items: items}, nil
+}
+
+func (s *Service) CreateClubInvite(
+	ctx context.Context,
+	actorUserID string,
+	request CreateClubInviteRequest,
+) (*CreateClubInviteResponse, error) {
+	userRow, err := s.store.FindUserByID(ctx, actorUserID)
+	if err != nil {
+		return nil, err
+	}
+	if userRow == nil || !userRow.IsActive {
+		return nil, errors.New("user does not exist")
+	}
+
+	clubID := strings.TrimSpace(request.ClubID)
+	clubRole := strings.TrimSpace(request.ClubRole)
+	if clubID == "" || clubRole == "" {
+		return nil, errors.New("clubId and clubRole are required")
+	}
+	if clubRole != ClubRoleOwner && clubRole != ClubRoleAssistant {
+		return nil, errors.New("invalid club role")
+	}
+
+	if userRow.SystemRole != SystemRoleSysAdmin {
+		membershipRow, err := s.store.FindMembershipByUserAndClub(ctx, actorUserID, clubID)
+		if err != nil {
+			return nil, err
+		}
+		if membershipRow == nil || !membershipRow.IsActive || membershipRow.ClubRole != ClubRoleOwner {
+			return nil, errors.New("forbidden")
+		}
+		if clubRole != ClubRoleAssistant {
+			return nil, errors.New("owners can only create assistant invite links")
+		}
+	}
+
+	expiresInDays := request.ExpiresInDays
+	if expiresInDays <= 0 {
+		expiresInDays = 3
+	}
+	if expiresInDays > 30 {
+		return nil, errors.New("expiresInDays must be between 1 and 30")
+	}
+
+	rawToken, tokenHash, err := generateInviteToken()
+	if err != nil {
+		return nil, err
+	}
+	expiresAt := time.Now().UTC().Add(time.Duration(expiresInDays) * 24 * time.Hour)
+	var inviteeEmail *string
+	if email := strings.TrimSpace(strings.ToLower(request.InviteeEmail)); email != "" {
+		inviteeEmail = &email
+	}
+
+	row, err := s.store.CreateClubInvite(
+		ctx,
+		clubID,
+		actorUserID,
+		inviteeEmail,
+		clubRole,
+		tokenHash,
+		expiresAt,
+		1,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CreateClubInviteResponse{
+		Invite: mapClubInvite(row),
+		Token:  rawToken,
+	}, nil
+}
+
+func (s *Service) RevokeClubInvite(
+	ctx context.Context,
+	actorUserID string,
+	inviteID string,
+) (*ClubInvite, error) {
+	userRow, err := s.store.FindUserByID(ctx, actorUserID)
+	if err != nil {
+		return nil, err
+	}
+	if userRow == nil || !userRow.IsActive {
+		return nil, errors.New("user does not exist")
+	}
+
+	inviteRow, err := s.store.FindClubInviteByID(ctx, inviteID)
+	if err != nil {
+		return nil, err
+	}
+	if inviteRow == nil {
+		return nil, errors.New("invite does not exist")
+	}
+	if err := s.requireInviteAccess(ctx, actorUserID, userRow.SystemRole, inviteRow, true); err != nil {
+		return nil, err
+	}
+
+	row, err := s.store.RevokeClubInvite(ctx, inviteID)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, errors.New("invite does not exist")
+	}
+
+	invite := mapClubInvite(row)
+	return &invite, nil
+}
+
+func (s *Service) GetClubInvitePreview(
+	ctx context.Context,
+	token string,
+) (*ClubInvitePreview, error) {
+	row, err := s.store.FindActiveClubInviteByTokenHash(ctx, hashInviteToken(token))
+	if err != nil {
+		return nil, err
+	}
+	if row == nil || row.RevokedAt != nil {
+		return nil, errors.New("invite does not exist")
+	}
+	if err := validateInviteActive(row); err != nil {
+		return nil, err
+	}
+
+	return &ClubInvitePreview{
+		ClubID:       row.ClubID,
+		ClubName:     row.ClubName,
+		ClubRole:     row.ClubRole,
+		InviterName:  row.InviterName,
+		InviteeEmail: row.InviteeEmail,
+		ExpiresAt:    row.ExpiresAt.UTC().Format(time.RFC3339Nano),
+	}, nil
+}
+
+func (s *Service) AcceptClubInvite(
+	ctx context.Context,
+	token string,
+	request AcceptClubInviteRequest,
+) (*LoginResponse, error) {
+	row, err := s.store.FindActiveClubInviteByTokenHash(ctx, hashInviteToken(token))
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, errors.New("invite does not exist")
+	}
+	if err := validateInviteActive(row); err != nil {
+		return nil, err
+	}
+
+	email := strings.TrimSpace(strings.ToLower(request.Email))
+	password := request.Password
+	if email == "" || password == "" {
+		return nil, errors.New("email and password are required")
+	}
+	if row.InviteeEmail != nil && strings.TrimSpace(strings.ToLower(*row.InviteeEmail)) != email {
+		return nil, errors.New("invite email does not match")
+	}
+
+	userRow, err := s.store.FindUserByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	if userRow != nil && !userRow.IsActive {
+		return nil, errors.New("account is inactive")
+	}
+
+	if userRow == nil {
+		fullName := strings.TrimSpace(request.FullName)
+		if fullName == "" {
+			return nil, errors.New("fullName is required")
+		}
+		passwordHash, err := HashPassword(password)
+		if err != nil {
+			return nil, err
+		}
+		userRow, err = s.store.CreateUser(ctx, email, fullName, passwordHash, SystemRoleUser, true)
+		if err != nil {
+			return nil, err
+		}
+	} else if err := VerifyPassword(userRow.PasswordHash, password); err != nil {
+		return nil, errors.New("invalid credentials")
+	}
+
+	existingMembership, err := s.store.FindMembershipByUserAndClub(ctx, userRow.ID, row.ClubID)
+	if err != nil {
+		return nil, err
+	}
+	if existingMembership == nil {
+		if _, err := s.store.CreateMembership(ctx, userRow.ID, row.ClubID, row.ClubRole, true); err != nil {
+			return nil, err
+		}
+	}
+
+	if _, err := s.store.AcceptClubInvite(ctx, row.ID, userRow.ID); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	if err := s.store.UpdateLastLoginAt(ctx, userRow.ID, now); err != nil {
+		return nil, err
+	}
+	userRow.LastLoginAt = &now
+	userRow.UpdatedAt = now
+
+	memberships, err := s.listMemberships(ctx, userRow.ID)
+	if err != nil {
+		return nil, err
+	}
+	tokenValue, err := s.signClaims(Claims{
+		Subject:    userRow.ID,
+		SystemRole: userRow.SystemRole,
+		ExpiresAt:  now.Add(s.tokenTTL).Unix(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &LoginResponse{
+		Token:       tokenValue,
+		User:        mapUser(userRow),
+		Memberships: memberships,
+	}, nil
+}
+
 func (s *Service) RemoveMembership(
 	ctx context.Context,
 	actorUserID string,
@@ -506,6 +761,27 @@ func mapMembership(row *membershipRow) ClubMembership {
 	}
 }
 
+func mapClubInvite(row *clubInviteRow) ClubInvite {
+	return ClubInvite{
+		ID:               row.ID,
+		ClubID:           row.ClubID,
+		ClubName:         row.ClubName,
+		InviterUserID:    row.InviterUserID,
+		InviterName:      row.InviterName,
+		InviteeEmail:     row.InviteeEmail,
+		ClubRole:         row.ClubRole,
+		ExpiresAt:        row.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		MaxUses:          row.MaxUses,
+		UseCount:         row.UseCount,
+		LastUsedAt:       formatOptionalTime(row.LastUsedAt),
+		AcceptedAt:       formatOptionalTime(row.AcceptedAt),
+		AcceptedByUserID: row.AcceptedByUserID,
+		RevokedAt:        formatOptionalTime(row.RevokedAt),
+		CreatedAt:        row.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:        row.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
 func formatOptionalTime(value *time.Time) *string {
 	if value == nil {
 		return nil
@@ -526,4 +802,80 @@ func (s *Service) requireSysAdmin(ctx context.Context, userID string) error {
 		return errors.New("forbidden")
 	}
 	return nil
+}
+
+func (s *Service) accessibleInviteClubIDs(
+	ctx context.Context,
+	userID string,
+	systemRole string,
+) ([]string, error) {
+	if systemRole == SystemRoleSysAdmin {
+		return s.store.ListActiveClubIDs(ctx)
+	}
+
+	memberships, err := s.store.ListMembershipsByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	clubIDs := make([]string, 0)
+	for _, membership := range memberships {
+		if membership.IsActive && membership.ClubRole == ClubRoleOwner {
+			clubIDs = append(clubIDs, membership.ClubID)
+		}
+	}
+	return clubIDs, nil
+}
+
+func (s *Service) requireInviteAccess(
+	ctx context.Context,
+	actorUserID string,
+	systemRole string,
+	invite *clubInviteRow,
+	forWrite bool,
+) error {
+	if systemRole == SystemRoleSysAdmin {
+		return nil
+	}
+	membershipRow, err := s.store.FindMembershipByUserAndClub(ctx, actorUserID, invite.ClubID)
+	if err != nil {
+		return err
+	}
+	if membershipRow == nil || !membershipRow.IsActive || membershipRow.ClubRole != ClubRoleOwner {
+		return errors.New("forbidden")
+	}
+	if forWrite && invite.ClubRole != ClubRoleAssistant {
+		return errors.New("forbidden")
+	}
+	return nil
+}
+
+func validateInviteActive(row *clubInviteRow) error {
+	now := time.Now().UTC()
+	if row.RevokedAt != nil {
+		return errors.New("invite has been revoked")
+	}
+	if row.AcceptedAt != nil {
+		return errors.New("invite has already been used")
+	}
+	if row.ExpiresAt.Before(now) {
+		return errors.New("invite has expired")
+	}
+	if row.UseCount >= row.MaxUses {
+		return errors.New("invite has already been used")
+	}
+	return nil
+}
+
+func generateInviteToken() (string, string, error) {
+	buffer := make([]byte, 24)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", "", err
+	}
+	rawToken := hex.EncodeToString(buffer)
+	return rawToken, hashInviteToken(rawToken), nil
+}
+
+func hashInviteToken(token string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	return hex.EncodeToString(sum[:])
 }

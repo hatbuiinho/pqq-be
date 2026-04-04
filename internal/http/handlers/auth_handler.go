@@ -231,6 +231,104 @@ func (h *AuthHandler) AddMembership(c *gin.Context) {
 	c.JSON(http.StatusCreated, response)
 }
 
+func (h *AuthHandler) ListClubInvites(c *gin.Context) {
+	claims, ok := claimsFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	response, err := h.service.ListClubInvites(c.Request.Context(), claims.Subject)
+	if err != nil {
+		handleAuthServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *AuthHandler) CreateClubInvite(c *gin.Context) {
+	claims, ok := claimsFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var request auth.CreateClubInviteRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	response, err := h.service.CreateClubInvite(c.Request.Context(), claims.Subject, request)
+	if err != nil {
+		handleAuthServiceError(c, err)
+		return
+	}
+	response.ShareURL = buildClubInviteShareURL(c, response.Token)
+	c.JSON(http.StatusCreated, response)
+}
+
+func (h *AuthHandler) RevokeClubInvite(c *gin.Context) {
+	claims, ok := claimsFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	inviteID := strings.TrimSpace(c.Param("inviteId"))
+	if inviteID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "inviteId is required"})
+		return
+	}
+
+	response, err := h.service.RevokeClubInvite(c.Request.Context(), claims.Subject, inviteID)
+	if err != nil {
+		handleAuthServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *AuthHandler) GetClubInvitePreview(c *gin.Context) {
+	token := strings.TrimSpace(c.Param("token"))
+	if token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "token is required"})
+		return
+	}
+
+	response, err := h.service.GetClubInvitePreview(c.Request.Context(), token)
+	if err != nil {
+		handleAuthServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *AuthHandler) AcceptClubInvite(c *gin.Context) {
+	token := strings.TrimSpace(c.Param("token"))
+	if token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "token is required"})
+		return
+	}
+
+	var request auth.AcceptClubInviteRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	response, err := h.service.AcceptClubInvite(c.Request.Context(), token, request)
+	if err != nil {
+		handleAuthServiceError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *AuthHandler) RemoveMembership(c *gin.Context) {
 	claims, ok := claimsFromContext(c)
 	if !ok {
@@ -289,9 +387,19 @@ func handleAuthServiceError(c *gin.Context, err error) {
 	switch err.Error() {
 	case "forbidden":
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-	case "user does not exist", "membership does not exist":
+	case "user does not exist", "membership does not exist", "invite does not exist":
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case "invalid credentials":
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	}
+}
+
+func buildClubInviteShareURL(c *gin.Context, token string) string {
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + c.Request.Host + "/accept-invite/" + token
 }

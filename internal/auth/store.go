@@ -38,6 +38,26 @@ type membershipRow struct {
 	UpdatedAt time.Time
 }
 
+type clubInviteRow struct {
+	ID               string
+	ClubID           string
+	ClubName         string
+	InviterUserID    string
+	InviterName      string
+	InviteeEmail     *string
+	ClubRole         string
+	TokenHash        string
+	ExpiresAt        time.Time
+	MaxUses          int
+	UseCount         int
+	LastUsedAt       *time.Time
+	AcceptedAt       *time.Time
+	AcceptedByUserID *string
+	RevokedAt        *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
@@ -197,6 +217,31 @@ func (s *Store) ListUsers(ctx context.Context) ([]userRow, error) {
 			return nil, err
 		}
 		result = append(result, row)
+	}
+
+	return result, rows.Err()
+}
+
+func (s *Store) ListActiveClubIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(
+		ctx,
+		`SELECT id
+		   FROM clubs
+		  WHERE deleted_at IS NULL
+		  ORDER BY id ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]string, 0)
+	for rows.Next() {
+		var clubID string
+		if err := rows.Scan(&clubID); err != nil {
+			return nil, err
+		}
+		result = append(result, clubID)
 	}
 
 	return result, rows.Err()
@@ -474,5 +519,305 @@ func (s *Store) RevokeMembership(
 		return nil, err
 	}
 
+	return &row, nil
+}
+
+func (s *Store) ListClubInvites(ctx context.Context, clubIDs []string) ([]clubInviteRow, error) {
+	if len(clubIDs) == 0 {
+		return []clubInviteRow{}, nil
+	}
+
+	rows, err := s.pool.Query(
+		ctx,
+		`SELECT ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
+		        ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
+		        ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		        ci.created_at, ci.updated_at
+		   FROM club_invites ci
+		   INNER JOIN clubs c ON c.id = ci.club_id
+		   INNER JOIN users u ON u.id = ci.inviter_user_id
+		  WHERE ci.club_id = ANY($1)
+		  ORDER BY ci.created_at DESC`,
+		clubIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]clubInviteRow, 0)
+	for rows.Next() {
+		var row clubInviteRow
+		if err := rows.Scan(
+			&row.ID,
+			&row.ClubID,
+			&row.ClubName,
+			&row.InviterUserID,
+			&row.InviterName,
+			&row.InviteeEmail,
+			&row.ClubRole,
+			&row.TokenHash,
+			&row.ExpiresAt,
+			&row.MaxUses,
+			&row.UseCount,
+			&row.LastUsedAt,
+			&row.AcceptedAt,
+			&row.AcceptedByUserID,
+			&row.RevokedAt,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+
+	return result, rows.Err()
+}
+
+func (s *Store) CreateClubInvite(
+	ctx context.Context,
+	clubID string,
+	inviterUserID string,
+	inviteeEmail *string,
+	clubRole string,
+	tokenHash string,
+	expiresAt time.Time,
+	maxUses int,
+) (*clubInviteRow, error) {
+	now := time.Now().UTC()
+	row := clubInviteRow{}
+	err := s.pool.QueryRow(
+		ctx,
+		`INSERT INTO club_invites (
+			id, club_id, inviter_user_id, invitee_email, club_role, token_hash,
+			expires_at, max_uses, use_count, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $9)
+		RETURNING id, club_id,
+			(SELECT name FROM clubs WHERE id = $2),
+			inviter_user_id,
+			(SELECT full_name FROM users WHERE id = $3),
+			invitee_email, club_role, token_hash, expires_at, max_uses, use_count,
+			last_used_at, accepted_at, accepted_by_user_id, revoked_at, created_at, updated_at`,
+		uuid.NewString(),
+		clubID,
+		inviterUserID,
+		inviteeEmail,
+		clubRole,
+		tokenHash,
+		expiresAt,
+		maxUses,
+		now,
+	).Scan(
+		&row.ID,
+		&row.ClubID,
+		&row.ClubName,
+		&row.InviterUserID,
+		&row.InviterName,
+		&row.InviteeEmail,
+		&row.ClubRole,
+		&row.TokenHash,
+		&row.ExpiresAt,
+		&row.MaxUses,
+		&row.UseCount,
+		&row.LastUsedAt,
+		&row.AcceptedAt,
+		&row.AcceptedByUserID,
+		&row.RevokedAt,
+		&row.CreatedAt,
+		&row.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &row, nil
+}
+
+func (s *Store) FindClubInviteByID(ctx context.Context, inviteID string) (*clubInviteRow, error) {
+	row := clubInviteRow{}
+	err := s.pool.QueryRow(
+		ctx,
+		`SELECT ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
+		        ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
+		        ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		        ci.created_at, ci.updated_at
+		   FROM club_invites ci
+		   INNER JOIN clubs c ON c.id = ci.club_id
+		   INNER JOIN users u ON u.id = ci.inviter_user_id
+		  WHERE ci.id = $1
+		  LIMIT 1`,
+		inviteID,
+	).Scan(
+		&row.ID,
+		&row.ClubID,
+		&row.ClubName,
+		&row.InviterUserID,
+		&row.InviterName,
+		&row.InviteeEmail,
+		&row.ClubRole,
+		&row.TokenHash,
+		&row.ExpiresAt,
+		&row.MaxUses,
+		&row.UseCount,
+		&row.LastUsedAt,
+		&row.AcceptedAt,
+		&row.AcceptedByUserID,
+		&row.RevokedAt,
+		&row.CreatedAt,
+		&row.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (s *Store) FindActiveClubInviteByTokenHash(ctx context.Context, tokenHash string) (*clubInviteRow, error) {
+	row := clubInviteRow{}
+	err := s.pool.QueryRow(
+		ctx,
+		`SELECT ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
+		        ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
+		        ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		        ci.created_at, ci.updated_at
+		   FROM club_invites ci
+		   INNER JOIN clubs c ON c.id = ci.club_id
+		   INNER JOIN users u ON u.id = ci.inviter_user_id
+		  WHERE ci.token_hash = $1
+		    AND ci.revoked_at IS NULL
+		    AND ci.accepted_at IS NULL
+		  LIMIT 1`,
+		tokenHash,
+	).Scan(
+		&row.ID,
+		&row.ClubID,
+		&row.ClubName,
+		&row.InviterUserID,
+		&row.InviterName,
+		&row.InviteeEmail,
+		&row.ClubRole,
+		&row.TokenHash,
+		&row.ExpiresAt,
+		&row.MaxUses,
+		&row.UseCount,
+		&row.LastUsedAt,
+		&row.AcceptedAt,
+		&row.AcceptedByUserID,
+		&row.RevokedAt,
+		&row.CreatedAt,
+		&row.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (s *Store) RevokeClubInvite(ctx context.Context, inviteID string) (*clubInviteRow, error) {
+	row := clubInviteRow{}
+	now := time.Now().UTC()
+	err := s.pool.QueryRow(
+		ctx,
+		`UPDATE club_invites ci
+		    SET revoked_at = $2,
+		        updated_at = $2
+		   FROM clubs c, users u
+		  WHERE ci.id = $1
+		    AND ci.club_id = c.id
+		    AND ci.inviter_user_id = u.id
+		    AND ci.revoked_at IS NULL
+		    AND ci.accepted_at IS NULL
+		RETURNING ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
+		          ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
+		          ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		          ci.created_at, ci.updated_at`,
+		inviteID,
+		now,
+	).Scan(
+		&row.ID,
+		&row.ClubID,
+		&row.ClubName,
+		&row.InviterUserID,
+		&row.InviterName,
+		&row.InviteeEmail,
+		&row.ClubRole,
+		&row.TokenHash,
+		&row.ExpiresAt,
+		&row.MaxUses,
+		&row.UseCount,
+		&row.LastUsedAt,
+		&row.AcceptedAt,
+		&row.AcceptedByUserID,
+		&row.RevokedAt,
+		&row.CreatedAt,
+		&row.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (s *Store) AcceptClubInvite(
+	ctx context.Context,
+	inviteID string,
+	acceptedByUserID string,
+) (*clubInviteRow, error) {
+	row := clubInviteRow{}
+	now := time.Now().UTC()
+	err := s.pool.QueryRow(
+		ctx,
+		`UPDATE club_invites ci
+		    SET use_count = ci.use_count + 1,
+		        last_used_at = $3,
+		        accepted_at = CASE WHEN ci.use_count + 1 >= ci.max_uses THEN $3 ELSE ci.accepted_at END,
+		        accepted_by_user_id = CASE WHEN ci.use_count + 1 >= ci.max_uses THEN $2 ELSE ci.accepted_by_user_id END,
+		        updated_at = $3
+		   FROM clubs c, users u
+		  WHERE ci.id = $1
+		    AND ci.club_id = c.id
+		    AND ci.inviter_user_id = u.id
+		RETURNING ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
+		          ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
+		          ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		          ci.created_at, ci.updated_at`,
+		inviteID,
+		acceptedByUserID,
+		now,
+	).Scan(
+		&row.ID,
+		&row.ClubID,
+		&row.ClubName,
+		&row.InviterUserID,
+		&row.InviterName,
+		&row.InviteeEmail,
+		&row.ClubRole,
+		&row.TokenHash,
+		&row.ExpiresAt,
+		&row.MaxUses,
+		&row.UseCount,
+		&row.LastUsedAt,
+		&row.AcceptedAt,
+		&row.AcceptedByUserID,
+		&row.RevokedAt,
+		&row.CreatedAt,
+		&row.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
 	return &row, nil
 }

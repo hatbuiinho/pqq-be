@@ -28,6 +28,8 @@ func New(
 	api := engine.Group("/api/v1")
 	{
 		api.POST("/auth/login", authHandler.Login)
+		api.GET("/auth/club-invites/:token", authHandler.GetClubInvitePreview)
+		api.POST("/auth/club-invites/:token/accept", authHandler.AcceptClubInvite)
 		api.GET("/students/public-profile/:studentCode", syncHandler.GetStudentPublicProfile)
 		api.GET("/sync/ws", realtimeHandler.ServeWS)
 
@@ -43,6 +45,9 @@ func New(
 		authenticated.GET("/auth/users/:userId/memberships", authHandler.GetUserMemberships)
 		authenticated.POST("/auth/users/:userId/memberships", authHandler.AddMembership)
 		authenticated.POST("/auth/memberships/:membershipId/delete", authHandler.RemoveMembership)
+		authenticated.GET("/auth/club-invites", authHandler.ListClubInvites)
+		authenticated.POST("/auth/club-invites", authHandler.CreateClubInvite)
+		authenticated.POST("/auth/club-invites/by-id/:inviteId/revoke", authHandler.RevokeClubInvite)
 		authenticated.POST("/sync/push", syncHandler.Push)
 		authenticated.GET("/sync/pull", syncHandler.Pull)
 		authenticated.GET("/sync/rebase", syncHandler.Rebase)

@@ -355,11 +355,15 @@ CREATE TABLE IF NOT EXISTS club_invites (
 	id TEXT PRIMARY KEY,
 	club_id TEXT NOT NULL REFERENCES clubs(id),
 	inviter_user_id TEXT NOT NULL REFERENCES users(id),
-	invitee_email TEXT NOT NULL,
+	invitee_email TEXT NULL,
 	club_role TEXT NOT NULL,
 	token_hash TEXT NOT NULL,
 	expires_at TIMESTAMPTZ NOT NULL,
+	max_uses INTEGER NOT NULL DEFAULT 1,
+	use_count INTEGER NOT NULL DEFAULT 0,
+	last_used_at TIMESTAMPTZ NULL,
 	accepted_at TIMESTAMPTZ NULL,
+	accepted_by_user_id TEXT NULL REFERENCES users(id),
 	revoked_at TIMESTAMPTZ NULL,
 	created_at TIMESTAMPTZ NOT NULL,
 	updated_at TIMESTAMPTZ NOT NULL,
@@ -375,6 +379,15 @@ CREATE INDEX IF NOT EXISTS idx_club_invites_club_id
 
 CREATE INDEX IF NOT EXISTS idx_club_invites_invitee_email
 	ON club_invites (LOWER(invitee_email));
+
+ALTER TABLE club_invites
+	ALTER COLUMN invitee_email DROP NOT NULL;
+
+ALTER TABLE club_invites
+	ADD COLUMN IF NOT EXISTS max_uses INTEGER NOT NULL DEFAULT 1,
+	ADD COLUMN IF NOT EXISTS use_count INTEGER NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ NULL,
+	ADD COLUMN IF NOT EXISTS accepted_by_user_id TEXT NULL REFERENCES users(id);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
 	id TEXT PRIMARY KEY,
