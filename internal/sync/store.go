@@ -25,6 +25,10 @@ type Store interface {
 	ListClubScheduleWeekdays(ctx context.Context, tx pgx.Tx, clubID string) ([]string, error)
 	ReplaceStudentSchedule(ctx context.Context, tx pgx.Tx, studentID string, mode string, weekdays []string, serverNow string) error
 	RecordExists(ctx context.Context, tx pgx.Tx, entityName EntityName, recordID string) (bool, error)
+	ResolveStudentClubID(ctx context.Context, tx pgx.Tx, studentID string) (string, error)
+	ResolveAttendanceSessionClubID(ctx context.Context, tx pgx.Tx, sessionID string) (string, error)
+	ResolveStudentClubIDCurrent(ctx context.Context, studentID string) (string, error)
+	ResolveAttendanceSessionClubIDCurrent(ctx context.Context, sessionID string) (string, error)
 	NextStudentCode(ctx context.Context, tx pgx.Tx) (string, error)
 	FindActiveStudentProfileByCode(ctx context.Context, studentCode string) (*StudentPublicProfile, error)
 	ListAllCurrent(ctx context.Context) ([]ClubRecord, []ClubGroupRecord, []ClubScheduleRecord, []BeltRankRecord, []StudentRecord, []StudentScheduleProfileRecord, []StudentScheduleRecord, []AttendanceSessionRecord, []AttendanceRecord, error)

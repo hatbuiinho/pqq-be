@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"pqq/be/internal/auth"
+
 	"github.com/xuri/excelize/v2"
 )
 
@@ -54,6 +56,10 @@ type studentImportColumns struct {
 }
 
 func (s *Service) ImportStudents(ctx context.Context, file io.Reader) (ImportStudentsResponse, error) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return ImportStudentsResponse{}, errors.New("unauthorized")
+	}
 	workbook, err := excelWorkbookFromReader(file)
 	if err != nil {
 		return ImportStudentsResponse{}, err
@@ -86,6 +92,7 @@ func (s *Service) ImportStudents(ctx context.Context, file io.Reader) (ImportStu
 	rowErrors := append([]StudentImportRowError{}, parseErrors...)
 	changedEntityNames := make([]EntityName, 0, len(parsedRows)*3)
 	changedIDs := make([]string, 0, len(parsedRows)*3)
+	permissionCache := make(map[string]map[string]bool)
 
 	for _, row := range parsedRows {
 		clubRecord, err := s.store.FindClubByCode(ctx, tx, row.clubName, "")
@@ -106,6 +113,21 @@ func (s *Service) ImportStudents(ctx context.Context, file io.Reader) (ImportStu
 		var club ClubRecord
 		if err := json.Unmarshal(clubRecord.Payload, &club); err != nil {
 			return ImportStudentsResponse{}, err
+		}
+		if claims.SystemRole != auth.SystemRoleSysAdmin {
+			permissions, ok := permissionCache[club.ID]
+			if !ok {
+				response, err := s.authorizer.GetClubPermissions(ctx, claims.Subject, club.ID)
+				if err != nil {
+					return ImportStudentsResponse{}, err
+				}
+				permissions = response.Permissions
+				permissionCache[club.ID] = permissions
+			}
+			if !permissions[auth.PermissionImportsManage] {
+				rowErrors = append(rowErrors, StudentImportRowError{Row: row.rowNumber, Message: "You do not have permission to import students into this club."})
+				continue
+			}
 		}
 
 		var groupID *string

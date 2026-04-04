@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
+	"pqq/be/internal/auth"
 	"pqq/be/internal/sync"
 
 	"github.com/gin-gonic/gin"
@@ -10,13 +12,15 @@ import (
 )
 
 type RealtimeHandler struct {
-	hub      *sync.Hub
-	upgrader websocket.Upgrader
+	authService *auth.Service
+	hub         *sync.Hub
+	upgrader    websocket.Upgrader
 }
 
-func NewRealtimeHandler(hub *sync.Hub) *RealtimeHandler {
+func NewRealtimeHandler(authService *auth.Service, hub *sync.Hub) *RealtimeHandler {
 	return &RealtimeHandler{
-		hub: hub,
+		authService: authService,
+		hub:         hub,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -24,6 +28,17 @@ func NewRealtimeHandler(hub *sync.Hub) *RealtimeHandler {
 }
 
 func (h *RealtimeHandler) ServeWS(c *gin.Context) {
+	accessToken := strings.TrimSpace(c.Query("access_token"))
+	if accessToken == "" {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing access token"})
+		return
+	}
+
+	if _, err := h.authService.ParseToken(accessToken); err != nil {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return

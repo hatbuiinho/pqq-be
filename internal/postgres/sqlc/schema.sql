@@ -114,3 +114,54 @@ CREATE TABLE attendance_records (
 	last_modified_at TIMESTAMPTZ NOT NULL,
 	deleted_at TIMESTAMPTZ NULL
 );
+
+CREATE TABLE users (
+	id TEXT PRIMARY KEY,
+	email TEXT NOT NULL,
+	full_name TEXT NOT NULL,
+	password_hash TEXT NOT NULL,
+	system_role TEXT NOT NULL DEFAULT 'user',
+	is_active BOOLEAN NOT NULL DEFAULT TRUE,
+	last_login_at TIMESTAMPTZ NULL,
+	created_at TIMESTAMPTZ NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL,
+	deleted_at TIMESTAMPTZ NULL
+);
+
+CREATE TABLE club_memberships (
+	id TEXT PRIMARY KEY,
+	user_id TEXT NOT NULL REFERENCES users(id),
+	club_id TEXT NOT NULL REFERENCES clubs(id),
+	club_role TEXT NOT NULL,
+	is_active BOOLEAN NOT NULL DEFAULT TRUE,
+	created_at TIMESTAMPTZ NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL,
+	revoked_at TIMESTAMPTZ NULL
+);
+
+CREATE TABLE club_invites (
+	id TEXT PRIMARY KEY,
+	club_id TEXT NOT NULL REFERENCES clubs(id),
+	inviter_user_id TEXT NOT NULL REFERENCES users(id),
+	invitee_email TEXT NOT NULL,
+	club_role TEXT NOT NULL,
+	token_hash TEXT NOT NULL,
+	expires_at TIMESTAMPTZ NOT NULL,
+	accepted_at TIMESTAMPTZ NULL,
+	revoked_at TIMESTAMPTZ NULL,
+	created_at TIMESTAMPTZ NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE audit_logs (
+	id TEXT PRIMARY KEY,
+	actor_user_id TEXT NULL REFERENCES users(id),
+	club_id TEXT NULL REFERENCES clubs(id),
+	entity_type TEXT NOT NULL,
+	entity_id TEXT NULL,
+	action TEXT NOT NULL,
+	old_values JSONB NULL,
+	new_values JSONB NULL,
+	metadata JSONB NOT NULL,
+	created_at TIMESTAMPTZ NOT NULL
+);

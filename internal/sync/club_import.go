@@ -39,6 +39,9 @@ type clubImportColumns struct {
 }
 
 func (s *Service) ImportClubs(ctx context.Context, file io.Reader) (ImportClubsResponse, error) {
+	if err := s.requireSysAdmin(ctx); err != nil {
+		return ImportClubsResponse{}, err
+	}
 	workbook, err := excelWorkbookFromReader(file)
 	if err != nil {
 		return ImportClubsResponse{}, err

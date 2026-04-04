@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"time"
 
+	"pqq/be/internal/auth"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -15,15 +17,25 @@ var studentCodePattern = regexp.MustCompile(`^PQQ-\d{6}$`)
 var weekdayPattern = regexp.MustCompile(`^(mon|tue|wed|thu|fri|sat|sun)$`)
 
 type Service struct {
-	store Store
-	hub   *Hub
+	store      Store
+	hub        *Hub
+	authorizer MutationAuthorizer
 }
 
-func NewService(store Store, hub *Hub) *Service {
-	return &Service{store: store, hub: hub}
+type MutationAuthorizer interface {
+	GetClubPermissions(ctx context.Context, userID string, clubID string) (*auth.ClubPermissionResponse, error)
+	ListMemberships(ctx context.Context, userID string) ([]auth.ClubMembership, error)
+}
+
+func NewService(store Store, hub *Hub, authorizer MutationAuthorizer) *Service {
+	return &Service{store: store, hub: hub, authorizer: authorizer}
 }
 
 func (s *Service) Push(ctx context.Context, request PushRequest) (PushResponse, error) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return PushResponse{}, errors.New("unauthorized")
+	}
 	if request.DeviceID == "" {
 		return PushResponse{}, errors.New("deviceId is required")
 	}
@@ -59,6 +71,20 @@ func (s *Service) Push(ctx context.Context, request PushRequest) (PushResponse, 
 
 		existing, err := s.store.GetRecordForUpdate(ctx, tx, mutation.EntityName, mutation.RecordID)
 		if err != nil {
+			return PushResponse{}, err
+		}
+
+		if err := s.authorizeMutation(ctx, tx, claims, mutation, existing); err != nil {
+			if conflict, ok := err.(conflictError); ok {
+				response.Conflicts = append(response.Conflicts, Conflict{
+					MutationID: mutation.MutationID,
+					EntityName: mutation.EntityName,
+					RecordID:   mutation.RecordID,
+					Reason:     conflict.reason,
+					Message:    conflict.message,
+				})
+				continue
+			}
 			return PushResponse{}, err
 		}
 
@@ -126,7 +152,67 @@ func (s *Service) Push(ctx context.Context, request PushRequest) (PushResponse, 
 	return response, nil
 }
 
+func (s *Service) authorizeMutation(
+	ctx context.Context,
+	tx pgx.Tx,
+	claims *auth.Claims,
+	mutation SyncMutation,
+	existing *StoredRecord,
+) error {
+	scope, err := s.ResolveMutationScope(ctx, tx, mutation, existing)
+	if err != nil {
+		return err
+	}
+
+	permission := requiredMutationPermission(mutation)
+	if permission == "" {
+		return nil
+	}
+
+	clubID := scope.ClubID
+	permissions, err := s.authorizer.GetClubPermissions(ctx, claims.Subject, clubID)
+	if err != nil {
+		return err
+	}
+	if permissions.Permissions[permission] {
+		return nil
+	}
+
+	return conflictError{
+		reason:  "forbidden",
+		message: fmt.Sprintf("You do not have permission to %s for this record.", permission),
+	}
+}
+
+func requiredMutationPermission(mutation SyncMutation) string {
+	switch mutation.EntityName {
+	case EntityClubs:
+		return auth.PermissionClubManage
+	case EntityClubGroups:
+		return auth.PermissionClubGroupsWrite
+	case EntityClubSchedules:
+		return auth.PermissionClubManage
+	case EntityBeltRanks:
+		return auth.PermissionBeltRanksWrite
+	case EntityStudents:
+		if mutation.Operation == OperationDelete {
+			return auth.PermissionStudentsDelete
+		}
+		return auth.PermissionStudentsWrite
+	case EntityStudentScheduleProfiles, EntityStudentSchedules:
+		return auth.PermissionStudentsWrite
+	case EntityAttendanceSessions, EntityAttendanceRecords:
+		return auth.PermissionAttendanceWrite
+	default:
+		return ""
+	}
+}
+
 func (s *Service) Pull(ctx context.Context, request PullRequest) (PullResponse, error) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return PullResponse{}, errors.New("unauthorized")
+	}
 	if request.DeviceID == "" {
 		return PullResponse{}, errors.New("deviceId is required")
 	}
@@ -134,34 +220,112 @@ func (s *Service) Pull(ctx context.Context, request PullRequest) (PullResponse, 
 		request.Limit = 200
 	}
 
-	rows, err := s.store.ListChangesSince(ctx, request.Since, request.Limit)
-	if err != nil {
-		return PullResponse{}, err
-	}
-
-	changes := make([]PullChange, 0, len(rows))
+	changes := make([]PullChange, 0, request.Limit)
 	nextSince := request.Since
-	for _, row := range rows {
-		changes = append(changes, PullChange{
-			EntityName:       row.EntityName,
-			Record:           row.Payload,
-			ServerModifiedAt: row.ServerModifiedAt,
-		})
-		nextSince = encodeSyncCursor(row.ServerModifiedAt, row.ChangeID)
+	hasMore := false
+	permissionCache := make(map[string]map[string]bool)
+
+	for len(changes) < request.Limit {
+		rows, err := s.store.ListChangesSince(ctx, nextSince, request.Limit)
+		if err != nil {
+			return PullResponse{}, err
+		}
+		if len(rows) == 0 {
+			hasMore = false
+			break
+		}
+
+		for _, row := range rows {
+			nextSince = encodeSyncCursor(row.ServerModifiedAt, row.ChangeID)
+
+			allowed, err := s.canReadStoredRecord(ctx, claims, row, permissionCache)
+			if err != nil {
+				return PullResponse{}, err
+			}
+			if !allowed {
+				continue
+			}
+
+			if len(changes) < request.Limit {
+				changes = append(changes, PullChange{
+					EntityName:       row.EntityName,
+					Record:           row.Payload,
+					ServerModifiedAt: row.ServerModifiedAt,
+				})
+			}
+		}
+
+		if len(rows) < request.Limit {
+			hasMore = false
+			break
+		}
+
+		if len(changes) >= request.Limit {
+			hasMore = true
+			break
+		}
 	}
 
 	return PullResponse{
 		ServerTime: time.Now().UTC().Format(time.RFC3339Nano),
 		NextSince:  nextSince,
-		HasMore:    len(rows) == request.Limit,
+		HasMore:    hasMore,
 		Changes:    changes,
 	}, nil
 }
 
 func (s *Service) Rebase(ctx context.Context) (RebaseResponse, error) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return RebaseResponse{}, errors.New("unauthorized")
+	}
 	clubs, clubGroups, clubSchedules, beltRanks, students, studentScheduleProfiles, studentSchedules, attendanceSessions, attendanceRecords, err := s.store.ListAllCurrent(ctx)
 	if err != nil {
 		return RebaseResponse{}, err
+	}
+
+	allowedClubIDs, err := s.listReadableClubIDs(ctx, claims)
+	if err != nil {
+		return RebaseResponse{}, err
+	}
+
+	if claims.SystemRole != auth.SystemRoleSysAdmin {
+		clubs = filterRecords(clubs, func(record ClubRecord) bool {
+			return allowedClubIDs[record.ID]
+		})
+		clubGroups = filterRecords(clubGroups, func(record ClubGroupRecord) bool {
+			return allowedClubIDs[record.ClubID]
+		})
+		clubSchedules = filterRecords(clubSchedules, func(record ClubScheduleRecord) bool {
+			return allowedClubIDs[record.ClubID]
+		})
+		students = filterRecords(students, func(record StudentRecord) bool {
+			return allowedClubIDs[record.ClubID]
+		})
+
+		readableStudentIDs := make(map[string]bool, len(students))
+		for _, student := range students {
+			readableStudentIDs[student.ID] = true
+		}
+
+		studentScheduleProfiles = filterRecords(studentScheduleProfiles, func(record StudentScheduleProfileRecord) bool {
+			return readableStudentIDs[record.StudentID]
+		})
+		studentSchedules = filterRecords(studentSchedules, func(record StudentScheduleRecord) bool {
+			return readableStudentIDs[record.StudentID]
+		})
+		attendanceSessions = filterRecords(attendanceSessions, func(record AttendanceSessionRecord) bool {
+			return allowedClubIDs[record.ClubID]
+		})
+
+		readableSessionIDs := make(map[string]bool, len(attendanceSessions))
+		for _, session := range attendanceSessions {
+			readableSessionIDs[session.ID] = true
+		}
+
+		attendanceRecords = filterRecords(attendanceRecords, func(record AttendanceRecord) bool {
+			return readableSessionIDs[record.SessionID] || readableStudentIDs[record.StudentID]
+		})
 	}
 
 	return RebaseResponse{
@@ -178,8 +342,100 @@ func (s *Service) Rebase(ctx context.Context) (RebaseResponse, error) {
 	}, nil
 }
 
+func (s *Service) canReadStoredRecord(
+	ctx context.Context,
+	claims *auth.Claims,
+	record StoredRecord,
+	permissionCache map[string]map[string]bool,
+) (bool, error) {
+	scope, err := s.ResolveStoredRecordScope(ctx, record)
+	if err != nil {
+		return false, err
+	}
+	if scope.IsGlobal || claims.SystemRole == auth.SystemRoleSysAdmin {
+		return true, nil
+	}
+
+	permission := requiredReadPermission(record.EntityName)
+	if permission == "" {
+		return true, nil
+	}
+
+	clubPermissions, ok := permissionCache[scope.ClubID]
+	if !ok {
+		response, err := s.authorizer.GetClubPermissions(ctx, claims.Subject, scope.ClubID)
+		if err != nil {
+			return false, err
+		}
+		clubPermissions = response.Permissions
+		permissionCache[scope.ClubID] = clubPermissions
+	}
+
+	return clubPermissions[permission], nil
+}
+
+func (s *Service) listReadableClubIDs(
+	ctx context.Context,
+	claims *auth.Claims,
+) (map[string]bool, error) {
+	if claims.SystemRole == auth.SystemRoleSysAdmin {
+		return map[string]bool{}, nil
+	}
+
+	memberships, err := s.authorizer.ListMemberships(ctx, claims.Subject)
+	if err != nil {
+		return nil, err
+	}
+
+	clubIDs := make(map[string]bool, len(memberships))
+	for _, membership := range memberships {
+		clubIDs[membership.ClubID] = true
+	}
+	return clubIDs, nil
+}
+
+func requiredReadPermission(entityName EntityName) string {
+	switch entityName {
+	case EntityClubs:
+		return auth.PermissionClubRead
+	case EntityClubGroups:
+		return auth.PermissionClubGroupsRead
+	case EntityClubSchedules:
+		return auth.PermissionClubRead
+	case EntityBeltRanks:
+		return auth.PermissionBeltRanksRead
+	case EntityStudents, EntityStudentScheduleProfiles, EntityStudentSchedules:
+		return auth.PermissionStudentsRead
+	case EntityAttendanceSessions, EntityAttendanceRecords:
+		return auth.PermissionAttendanceRead
+	default:
+		return ""
+	}
+}
+
+func filterRecords[T any](items []T, predicate func(item T) bool) []T {
+	result := make([]T, 0, len(items))
+	for _, item := range items {
+		if predicate(item) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
 func (s *Service) GetStudentPublicProfile(ctx context.Context, studentCode string) (*StudentPublicProfile, error) {
 	return s.store.FindActiveStudentProfileByCode(ctx, studentCode)
+}
+
+func (s *Service) requireSysAdmin(ctx context.Context) error {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return errors.New("unauthorized")
+	}
+	if claims.SystemRole != auth.SystemRoleSysAdmin {
+		return errors.New("forbidden")
+	}
+	return nil
 }
 
 func (s *Service) canonicalizeMutation(

@@ -38,6 +38,9 @@ type beltRankImportColumns struct {
 var nonSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
 
 func (s *Service) ImportBeltRanks(ctx context.Context, file io.Reader) (ImportBeltRanksResponse, error) {
+	if err := s.requireSysAdmin(ctx); err != nil {
+		return ImportBeltRanksResponse{}, err
+	}
 	workbook, err := excelWorkbookFromReader(file)
 	if err != nil {
 		return ImportBeltRanksResponse{}, err

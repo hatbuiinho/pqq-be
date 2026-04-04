@@ -13,7 +13,16 @@ type Config struct {
 	DatabaseURL   string
 	AllowedOrigin string
 	PullLimit     int
+	Auth          AuthConfig
 	Storage       StorageConfig
+}
+
+type AuthConfig struct {
+	TokenSecret            string
+	TokenTTLMinutes        int
+	BootstrapAdminEmail    string
+	BootstrapAdminName     string
+	BootstrapAdminPassword string
 }
 
 type StorageConfig struct {
@@ -36,6 +45,13 @@ func Load() Config {
 		DatabaseURL:   getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/pqq?sslmode=disable"),
 		AllowedOrigin: getEnv("ALLOWED_ORIGIN", "*"),
 		PullLimit:     200,
+		Auth: AuthConfig{
+			TokenSecret:            getEnv("AUTH_TOKEN_SECRET", ""),
+			TokenTTLMinutes:        getIntEnv("AUTH_TOKEN_TTL_MINUTES", 720),
+			BootstrapAdminEmail:    getEnv("BOOTSTRAP_ADMIN_EMAIL", ""),
+			BootstrapAdminName:     getEnv("BOOTSTRAP_ADMIN_NAME", "System Admin"),
+			BootstrapAdminPassword: getEnv("BOOTSTRAP_ADMIN_PASSWORD", ""),
+		},
 		Storage: StorageConfig{
 			Enabled:              getBoolEnv("MINIO_ENABLED", false),
 			Endpoint:             getEnv("MINIO_ENDPOINT", ""),

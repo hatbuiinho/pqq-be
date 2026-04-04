@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"pqq/be/internal/auth"
 	"pqq/be/internal/storage"
 )
 
@@ -46,6 +47,10 @@ type avatarMatchCandidate struct {
 }
 
 func (s *Service) AnalyzeAvatarImport(ctx context.Context, files []AvatarImportUpload) (*AnalyzeAvatarImportResponse, error) {
+	allowedClubIDs, isSysAdmin, err := s.readableClubIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if s.storage == nil {
 		return nil, errors.New("storage service is not configured")
 	}
@@ -56,6 +61,15 @@ func (s *Service) AnalyzeAvatarImport(ctx context.Context, files []AvatarImportU
 	students, err := s.store.ListActiveStudentsForImport(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if !isSysAdmin {
+		filtered := students[:0]
+		for _, student := range students {
+			if allowedClubIDs[student.ClubID] {
+				filtered = append(filtered, student)
+			}
+		}
+		students = filtered
 	}
 	candidates := buildAvatarMatchCandidates(students)
 
@@ -164,6 +178,9 @@ func (s *Service) AnalyzeAvatarImport(ctx context.Context, files []AvatarImportU
 }
 
 func (s *Service) GetAvatarImportBatch(ctx context.Context, batchID string) (*AnalyzeAvatarImportResponse, error) {
+	if _, _, err := s.readableClubIDs(ctx); err != nil {
+		return nil, err
+	}
 	batch, err := s.store.GetMediaImportBatchByID(ctx, batchID)
 	if err != nil {
 		return nil, err
@@ -189,6 +206,10 @@ func (s *Service) GetAvatarImportBatch(ctx context.Context, batchID string) (*An
 }
 
 func (s *Service) ConfirmAvatarImport(ctx context.Context, batchID string, request ConfirmAvatarImportRequest) (*ConfirmAvatarImportResponse, error) {
+	allowedClubIDs, isSysAdmin, err := s.readableClubIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if len(request.Items) == 0 {
 		return nil, errors.New("at least one item must be confirmed")
 	}
@@ -212,6 +233,15 @@ func (s *Service) ConfirmAvatarImport(ctx context.Context, batchID string, reque
 	for _, item := range request.Items {
 		if strings.TrimSpace(item.ItemID) == "" || strings.TrimSpace(item.StudentID) == "" {
 			return nil, errors.New("itemId and studentId are required")
+		}
+		if !isSysAdmin {
+			clubID, err := s.store.ResolveStudentClubID(ctx, item.StudentID)
+			if err != nil {
+				return nil, err
+			}
+			if clubID == "" || !allowedClubIDs[clubID] {
+				return nil, errors.New("forbidden")
+			}
 		}
 		itemMap[item.ItemID] = item.StudentID
 	}
@@ -344,6 +374,27 @@ func (s *Service) ConfirmAvatarImport(ctx context.Context, batchID string, reque
 		ImportedCount: importedCount,
 		Items:         viewItems,
 	}, nil
+}
+
+func (s *Service) readableClubIDs(ctx context.Context) (map[string]bool, bool, error) {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return nil, false, errors.New("unauthorized")
+	}
+	if claims.SystemRole == auth.SystemRoleSysAdmin {
+		return map[string]bool{}, true, nil
+	}
+
+	memberships, err := s.authorizer.ListMemberships(ctx, claims.Subject)
+	if err != nil {
+		return nil, false, err
+	}
+
+	clubIDs := make(map[string]bool, len(memberships))
+	for _, membership := range memberships {
+		clubIDs[membership.ClubID] = true
+	}
+	return clubIDs, false, nil
 }
 
 func toAvatarImportBatch(row mediaImportBatchRow) AvatarImportBatch {

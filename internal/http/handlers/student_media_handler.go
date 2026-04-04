@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"pqq/be/internal/media"
 
@@ -19,7 +20,7 @@ func NewStudentMediaHandler(service *media.Service) *StudentMediaHandler {
 func (h *StudentMediaHandler) ListStudentAvatars(c *gin.Context) {
 	items, err := h.service.ListStudentAvatars(c.Request.Context(), c.Param("studentId"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleStudentMediaError(c, err)
 		return
 	}
 
@@ -43,7 +44,7 @@ func (h *StudentMediaHandler) UploadStudentAvatar(c *gin.Context) {
 		header.Size,
 	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleStudentMediaError(c, err)
 		return
 	}
 
@@ -53,7 +54,7 @@ func (h *StudentMediaHandler) UploadStudentAvatar(c *gin.Context) {
 func (h *StudentMediaHandler) SetPrimaryAvatar(c *gin.Context) {
 	avatar, err := h.service.SetPrimaryAvatar(c.Request.Context(), c.Param("studentId"), c.Param("mediaId"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleStudentMediaError(c, err)
 		return
 	}
 
@@ -62,7 +63,7 @@ func (h *StudentMediaHandler) SetPrimaryAvatar(c *gin.Context) {
 
 func (h *StudentMediaHandler) DeleteAvatar(c *gin.Context) {
 	if err := h.service.DeleteAvatar(c.Request.Context(), c.Param("studentId"), c.Param("mediaId")); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleStudentMediaError(c, err)
 		return
 	}
 
@@ -101,7 +102,7 @@ func (h *StudentMediaHandler) AnalyzeAvatarImport(c *gin.Context) {
 
 	response, err := h.service.AnalyzeAvatarImport(c.Request.Context(), files)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleStudentMediaError(c, err)
 		return
 	}
 
@@ -111,7 +112,7 @@ func (h *StudentMediaHandler) AnalyzeAvatarImport(c *gin.Context) {
 func (h *StudentMediaHandler) GetAvatarImportBatch(c *gin.Context) {
 	response, err := h.service.GetAvatarImportBatch(c.Request.Context(), c.Param("batchId"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleStudentMediaError(c, err)
 		return
 	}
 
@@ -127,9 +128,24 @@ func (h *StudentMediaHandler) ConfirmAvatarImport(c *gin.Context) {
 
 	response, err := h.service.ConfirmAvatarImport(c.Request.Context(), c.Param("batchId"), request)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleStudentMediaError(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func handleStudentMediaError(c *gin.Context, err error) {
+	message := err.Error()
+
+	switch {
+	case message == "unauthorized":
+		c.JSON(http.StatusUnauthorized, gin.H{"error": message})
+	case message == "forbidden":
+		c.JSON(http.StatusForbidden, gin.H{"error": message})
+	case strings.Contains(message, "does not exist"):
+		c.JSON(http.StatusNotFound, gin.H{"error": message})
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": message})
+	}
 }

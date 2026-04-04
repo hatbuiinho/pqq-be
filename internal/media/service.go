@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"pqq/be/internal/auth"
 	"pqq/be/internal/storage"
 
 	"github.com/disintegration/imaging"
@@ -46,9 +47,15 @@ type Service struct {
 	store         *Store
 	storage       storage.Service
 	presignExpiry time.Duration
+	authorizer    Authorizer
 }
 
-func NewService(store *Store, storageService storage.Service, presignExpiryMinutes int) *Service {
+type Authorizer interface {
+	GetClubPermissions(ctx context.Context, userID string, clubID string) (*auth.ClubPermissionResponse, error)
+	ListMemberships(ctx context.Context, userID string) ([]auth.ClubMembership, error)
+}
+
+func NewService(store *Store, storageService storage.Service, presignExpiryMinutes int, authorizer Authorizer) *Service {
 	expiry := time.Duration(presignExpiryMinutes) * time.Minute
 	if expiry <= 0 {
 		expiry = 15 * time.Minute
@@ -58,10 +65,14 @@ func NewService(store *Store, storageService storage.Service, presignExpiryMinut
 		store:         store,
 		storage:       storageService,
 		presignExpiry: expiry,
+		authorizer:    authorizer,
 	}
 }
 
 func (s *Service) UploadStudentAvatar(ctx context.Context, studentID string, filename string, contentType string, file io.Reader, declaredSize int64) (*StudentMedia, error) {
+	if err := s.requireStudentPermission(ctx, studentID, auth.PermissionMediaManage); err != nil {
+		return nil, err
+	}
 	data, err := readAvatarBytes(file, declaredSize)
 	if err != nil {
 		return nil, err
@@ -79,6 +90,15 @@ func (s *Service) UploadStudentAvatar(ctx context.Context, studentID string, fil
 }
 
 func (s *Service) ListStudentAvatars(ctx context.Context, studentID string) ([]StudentMedia, error) {
+	if err := s.requireAnyStudentPermission(
+		ctx,
+		studentID,
+		auth.PermissionClubRead,
+		auth.PermissionStudentsRead,
+		auth.PermissionMediaManage,
+	); err != nil {
+		return nil, err
+	}
 	exists, err := s.store.StudentExists(ctx, studentID)
 	if err != nil {
 		return nil, err
@@ -104,6 +124,9 @@ func (s *Service) ListStudentAvatars(ctx context.Context, studentID string) ([]S
 }
 
 func (s *Service) SetPrimaryAvatar(ctx context.Context, studentID string, mediaID string) (*StudentMedia, error) {
+	if err := s.requireStudentPermission(ctx, studentID, auth.PermissionMediaManage); err != nil {
+		return nil, err
+	}
 	if err := s.store.SetPrimaryAvatar(ctx, studentID, mediaID, time.Now().UTC()); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errors.New("avatar does not exist")
@@ -122,6 +145,9 @@ func (s *Service) SetPrimaryAvatar(ctx context.Context, studentID string, mediaI
 }
 
 func (s *Service) DeleteAvatar(ctx context.Context, studentID string, mediaID string) error {
+	if err := s.requireStudentPermission(ctx, studentID, auth.PermissionMediaManage); err != nil {
+		return err
+	}
 	row, err := s.store.GetStudentMediaByID(ctx, studentID, mediaID)
 	if err != nil {
 		return err
@@ -144,6 +170,40 @@ func (s *Service) DeleteAvatar(ctx context.Context, studentID string, mediaID st
 		return s.storage.DeleteObject(ctx, *row.ThumbnailKey)
 	}
 	return nil
+}
+
+func (s *Service) requireStudentPermission(ctx context.Context, studentID string, permission string) error {
+	return s.requireAnyStudentPermission(ctx, studentID, permission)
+}
+
+func (s *Service) requireAnyStudentPermission(ctx context.Context, studentID string, permissionsToCheck ...string) error {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return errors.New("unauthorized")
+	}
+	if claims.SystemRole == auth.SystemRoleSysAdmin {
+		return nil
+	}
+
+	clubID, err := s.store.ResolveStudentClubID(ctx, studentID)
+	if err != nil {
+		return err
+	}
+	if clubID == "" {
+		return errors.New("student does not exist")
+	}
+
+	permissions, err := s.authorizer.GetClubPermissions(ctx, claims.Subject, clubID)
+	if err != nil {
+		return err
+	}
+	for _, permission := range permissionsToCheck {
+		if permissions.Permissions[permission] {
+			return nil
+		}
+	}
+
+	return errors.New("forbidden")
 }
 
 func (s *Service) toStudentMedia(ctx context.Context, row studentMediaRow) (*StudentMedia, error) {

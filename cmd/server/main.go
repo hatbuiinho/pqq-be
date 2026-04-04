@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"pqq/be/internal/auth"
 	"pqq/be/internal/config"
 	httpHandlers "pqq/be/internal/http/handlers"
 	"pqq/be/internal/http/router"
@@ -37,6 +38,18 @@ func main() {
 		log.Fatalf("ensure schema: %v", err)
 	}
 
+	authStore := auth.NewStore(pool)
+	authService := auth.NewService(authStore, auth.Config{
+		TokenSecret:            cfg.Auth.TokenSecret,
+		TokenTTLMinutes:        cfg.Auth.TokenTTLMinutes,
+		BootstrapAdminEmail:    cfg.Auth.BootstrapAdminEmail,
+		BootstrapAdminName:     cfg.Auth.BootstrapAdminName,
+		BootstrapAdminPassword: cfg.Auth.BootstrapAdminPassword,
+	})
+	if err := authService.EnsureBootstrapSysAdmin(ctx); err != nil {
+		log.Fatalf("ensure bootstrap sys admin: %v", err)
+	}
+
 	var storageService *storage.MinIOService
 	if cfg.Storage.Enabled {
 		storageService, err = storage.NewMinIOService(cfg.Storage)
@@ -53,18 +66,20 @@ func main() {
 
 	store := postgres.NewSyncStore(pool)
 	hub := sync.NewHub()
-	service := sync.NewService(store, hub)
+	service := sync.NewService(store, hub, authService)
 	var studentMediaHandler *httpHandlers.StudentMediaHandler
+	authHandler := httpHandlers.NewAuthHandler(authService)
+	authMiddleware := httpHandlers.AuthMiddleware(authService)
 
 	syncHandler := httpHandlers.NewSyncHandler(service)
-	wsHandler := httpHandlers.NewRealtimeHandler(hub)
+	wsHandler := httpHandlers.NewRealtimeHandler(authService, hub)
 	if storageService != nil {
 		mediaStore := media.NewStore(pool)
-		mediaService := media.NewService(mediaStore, storageService, cfg.Storage.PresignExpiryMinutes)
+		mediaService := media.NewService(mediaStore, storageService, cfg.Storage.PresignExpiryMinutes, authService)
 		studentMediaHandler = httpHandlers.NewStudentMediaHandler(mediaService)
 	}
 
-	engine := router.New(cfg, syncHandler, wsHandler, studentMediaHandler)
+	engine := router.New(cfg, authHandler, authMiddleware, syncHandler, wsHandler, studentMediaHandler)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,

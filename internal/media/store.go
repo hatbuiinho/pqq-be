@@ -40,12 +40,14 @@ type studentMediaRow struct {
 }
 
 type studentIdentity struct {
+	ClubID      string
 	StudentCode *string
 	FullName    string
 }
 
 type studentLookupRow struct {
 	ID          string
+	ClubID      string
 	StudentCode *string
 	FullName    string
 }
@@ -101,7 +103,7 @@ func (s *Store) StudentExists(ctx context.Context, studentID string) (bool, erro
 
 func (s *Store) GetStudentIdentity(ctx context.Context, studentID string) (*studentIdentity, error) {
 	query := `
-		SELECT student_code, full_name
+		SELECT club_id, student_code, full_name
 		FROM students
 		WHERE id = $1
 			AND deleted_at IS NULL
@@ -109,7 +111,7 @@ func (s *Store) GetStudentIdentity(ctx context.Context, studentID string) (*stud
 	`
 
 	var identity studentIdentity
-	if err := s.pool.QueryRow(ctx, query, studentID).Scan(&identity.StudentCode, &identity.FullName); err != nil {
+	if err := s.pool.QueryRow(ctx, query, studentID).Scan(&identity.ClubID, &identity.StudentCode, &identity.FullName); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -122,7 +124,7 @@ func (s *Store) GetStudentIdentity(ctx context.Context, studentID string) (*stud
 func (s *Store) ListActiveStudentsForImport(ctx context.Context) ([]studentLookupRow, error) {
 	rows, err := s.pool.Query(
 		ctx,
-		`SELECT id, student_code, full_name FROM students WHERE deleted_at IS NULL ORDER BY full_name ASC`,
+		`SELECT id, club_id, student_code, full_name FROM students WHERE deleted_at IS NULL ORDER BY full_name ASC`,
 	)
 	if err != nil {
 		return nil, err
@@ -132,13 +134,28 @@ func (s *Store) ListActiveStudentsForImport(ctx context.Context) ([]studentLooku
 	result := make([]studentLookupRow, 0)
 	for rows.Next() {
 		var row studentLookupRow
-		if err := rows.Scan(&row.ID, &row.StudentCode, &row.FullName); err != nil {
+		if err := rows.Scan(&row.ID, &row.ClubID, &row.StudentCode, &row.FullName); err != nil {
 			return nil, err
 		}
 		result = append(result, row)
 	}
 
 	return result, rows.Err()
+}
+
+func (s *Store) ResolveStudentClubID(ctx context.Context, studentID string) (string, error) {
+	var clubID string
+	if err := s.pool.QueryRow(
+		ctx,
+		`SELECT club_id FROM students WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+		studentID,
+	).Scan(&clubID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return clubID, nil
 }
 
 func (s *Store) InsertStudentMedia(ctx context.Context, row studentMediaRow) error {

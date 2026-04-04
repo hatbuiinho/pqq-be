@@ -602,6 +602,89 @@ func (s *SyncStore) RecordExists(ctx context.Context, tx pgx.Tx, entityName sync
 	return exists, nil
 }
 
+func (s *SyncStore) ResolveStudentClubID(ctx context.Context, tx pgx.Tx, studentID string) (string, error) {
+	const query = `
+		SELECT club_id
+		FROM students
+		WHERE id = $1
+		LIMIT 1
+	`
+
+	var clubID string
+	if err := tx.QueryRow(ctx, query, studentID).Scan(&clubID); err != nil {
+		if err == pgx.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+
+	return clubID, nil
+}
+
+func (s *SyncStore) ResolveAttendanceSessionClubID(
+	ctx context.Context,
+	tx pgx.Tx,
+	sessionID string,
+) (string, error) {
+	const query = `
+		SELECT club_id
+		FROM attendance_sessions
+		WHERE id = $1
+		LIMIT 1
+	`
+
+	var clubID string
+	if err := tx.QueryRow(ctx, query, sessionID).Scan(&clubID); err != nil {
+		if err == pgx.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+
+	return clubID, nil
+}
+
+func (s *SyncStore) ResolveStudentClubIDCurrent(ctx context.Context, studentID string) (string, error) {
+	const query = `
+		SELECT club_id
+		FROM students
+		WHERE id = $1
+		LIMIT 1
+	`
+
+	var clubID string
+	if err := s.pool.QueryRow(ctx, query, studentID).Scan(&clubID); err != nil {
+		if err == pgx.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+
+	return clubID, nil
+}
+
+func (s *SyncStore) ResolveAttendanceSessionClubIDCurrent(
+	ctx context.Context,
+	sessionID string,
+) (string, error) {
+	const query = `
+		SELECT club_id
+		FROM attendance_sessions
+		WHERE id = $1
+		LIMIT 1
+	`
+
+	var clubID string
+	if err := s.pool.QueryRow(ctx, query, sessionID).Scan(&clubID); err != nil {
+		if err == pgx.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+
+	return clubID, nil
+}
+
 func (s *SyncStore) NextStudentCode(ctx context.Context, tx pgx.Tx) (string, error) {
 	query := `
 		INSERT INTO sync_counters (scope, last_value)
