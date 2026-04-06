@@ -990,6 +990,7 @@ func mapAuditLog(row *auditLogRow) AuditLog {
 	return AuditLog{
 		ID:          row.ID,
 		ActorUserID: row.ActorUserID,
+		ActorName:   row.ActorName,
 		ClubID:      row.ClubID,
 		EntityType:  row.EntityType,
 		EntityID:    row.EntityID,

@@ -62,6 +62,7 @@ type clubInviteRow struct {
 type auditLogRow struct {
 	ID          string
 	ActorUserID *string
+	ActorName   *string
 	ClubID      *string
 	EntityType  string
 	EntityID    *string
@@ -876,14 +877,24 @@ func (s *Store) ListAuditLogs(ctx context.Context, query ListAuditLogsQuery, clu
 
 	rows, err := s.pool.Query(
 		ctx,
-		`SELECT id, actor_user_id, club_id, entity_type, entity_id, action,
-		        old_values, new_values, metadata, created_at
+		`SELECT audit_logs.id,
+		        audit_logs.actor_user_id,
+		        users.full_name AS actor_name,
+		        audit_logs.club_id,
+		        audit_logs.entity_type,
+		        audit_logs.entity_id,
+		        audit_logs.action,
+		        audit_logs.old_values,
+		        audit_logs.new_values,
+		        audit_logs.metadata,
+		        audit_logs.created_at
 		   FROM audit_logs
+		   LEFT JOIN users ON users.id = audit_logs.actor_user_id
 		  WHERE ($1::boolean OR club_id = ANY($2))
 		    AND ($3::text = '' OR COALESCE(club_id, '') = $3)
 		    AND ($4::text = '' OR entity_type = $4)
 		    AND ($5::text = '' OR COALESCE(entity_id, '') = $5)
-		  ORDER BY created_at DESC
+		  ORDER BY audit_logs.created_at DESC
 		  LIMIT $6`,
 		len(clubIDs) == 0,
 		clubIDs,
@@ -903,6 +914,7 @@ func (s *Store) ListAuditLogs(ctx context.Context, query ListAuditLogsQuery, clu
 		if err := rows.Scan(
 			&row.ID,
 			&row.ActorUserID,
+			&row.ActorName,
 			&row.ClubID,
 			&row.EntityType,
 			&row.EntityID,

@@ -133,6 +133,7 @@ type AcceptClubInviteRequest struct {
 type AuditLog struct {
 	ID          string          `json:"id"`
 	ActorUserID *string         `json:"actorUserId,omitempty"`
+	ActorName   *string         `json:"actorName,omitempty"`
 	ClubID      *string         `json:"clubId,omitempty"`
 	EntityType  string          `json:"entityType"`
 	EntityID    *string         `json:"entityId,omitempty"`
