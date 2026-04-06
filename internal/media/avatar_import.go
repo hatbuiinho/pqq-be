@@ -369,11 +369,52 @@ func (s *Service) ConfirmAvatarImport(ctx context.Context, batchID string, reque
 		return nil, err
 	}
 
+	if err := s.writeAvatarImportAuditLog(ctx, batchID, batch.ImportedItems, batch.FailedItems, replaceStrategy); err != nil {
+		return nil, err
+	}
+
 	return &ConfirmAvatarImportResponse{
 		Batch:         toAvatarImportBatch(*batch),
 		ImportedCount: importedCount,
 		Items:         viewItems,
 	}, nil
+}
+
+func (s *Service) writeAvatarImportAuditLog(
+	ctx context.Context,
+	batchID string,
+	importedCount int,
+	failedCount int,
+	replaceStrategy string,
+) error {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return errors.New("unauthorized")
+	}
+
+	metadata, err := marshalMediaAuditMetadata(map[string]any{
+		"batchId":         batchID,
+		"importedCount":   importedCount,
+		"failedCount":     failedCount,
+		"replaceStrategy": replaceStrategy,
+	})
+	if err != nil {
+		return err
+	}
+
+	actorUserID := claims.Subject
+	entityID := batchID
+	return s.store.InsertAuditLog(
+		ctx,
+		&actorUserID,
+		nil,
+		"student_media",
+		&entityID,
+		"batch_import_avatar",
+		nil,
+		nil,
+		metadata,
+	)
 }
 
 func (s *Service) readableClubIDs(ctx context.Context) (map[string]bool, bool, error) {

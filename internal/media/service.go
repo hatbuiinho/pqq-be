@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -86,7 +87,16 @@ func (s *Service) UploadStudentAvatar(ctx context.Context, studentID string, fil
 		contentType = detectedContentType
 	}
 
-	return s.storeAvatarBytes(ctx, studentID, filename, contentType, data, avatarSourceManual)
+	avatar, err := s.storeAvatarBytes(ctx, studentID, filename, contentType, data, avatarSourceManual)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.writeStudentMediaAuditLog(ctx, studentID, avatar.ID, "upload_avatar", nil, avatar, map[string]any{
+		"source": avatar.Source,
+	}); err != nil {
+		return nil, err
+	}
+	return avatar, nil
 }
 
 func (s *Service) ListStudentAvatars(ctx context.Context, studentID string) ([]StudentMedia, error) {
@@ -127,6 +137,13 @@ func (s *Service) SetPrimaryAvatar(ctx context.Context, studentID string, mediaI
 	if err := s.requireStudentPermission(ctx, studentID, auth.PermissionMediaManage); err != nil {
 		return nil, err
 	}
+	beforeRow, err := s.store.GetStudentMediaByID(ctx, studentID, mediaID)
+	if err != nil {
+		return nil, err
+	}
+	if beforeRow == nil {
+		return nil, errors.New("avatar does not exist")
+	}
 	if err := s.store.SetPrimaryAvatar(ctx, studentID, mediaID, time.Now().UTC()); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errors.New("avatar does not exist")
@@ -141,7 +158,15 @@ func (s *Service) SetPrimaryAvatar(ctx context.Context, studentID string, mediaI
 	if row == nil {
 		return nil, errors.New("avatar does not exist")
 	}
-	return s.toStudentMedia(ctx, *row)
+	avatar, err := s.toStudentMedia(ctx, *row)
+	if err != nil {
+		return nil, err
+	}
+	beforeValue := auditStudentMediaValue(*beforeRow)
+	if err := s.writeStudentMediaAuditLog(ctx, studentID, mediaID, "set_primary_avatar", beforeValue, avatar, nil); err != nil {
+		return nil, err
+	}
+	return avatar, nil
 }
 
 func (s *Service) DeleteAvatar(ctx context.Context, studentID string, mediaID string) error {
@@ -155,6 +180,7 @@ func (s *Service) DeleteAvatar(ctx context.Context, studentID string, mediaID st
 	if row == nil {
 		return errors.New("avatar does not exist")
 	}
+	oldValue := auditStudentMediaValue(*row)
 
 	if err := s.store.SoftDeleteStudentMedia(ctx, studentID, mediaID, time.Now().UTC()); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -167,9 +193,11 @@ func (s *Service) DeleteAvatar(ctx context.Context, studentID string, mediaID st
 		return err
 	}
 	if row.ThumbnailKey != nil && *row.ThumbnailKey != "" {
-		return s.storage.DeleteObject(ctx, *row.ThumbnailKey)
+		if err := s.storage.DeleteObject(ctx, *row.ThumbnailKey); err != nil {
+			return err
+		}
 	}
-	return nil
+	return s.writeStudentMediaAuditLog(ctx, studentID, mediaID, "delete_avatar", oldValue, nil, nil)
 }
 
 func (s *Service) requireStudentPermission(ctx context.Context, studentID string, permission string) error {
@@ -244,6 +272,99 @@ func (s *Service) toStudentMedia(ctx context.Context, row studentMediaRow) (*Stu
 	}
 
 	return result, nil
+}
+
+func (s *Service) writeStudentMediaAuditLog(
+	ctx context.Context,
+	studentID string,
+	mediaID string,
+	action string,
+	oldValue any,
+	newValue any,
+	metadata map[string]any,
+) error {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return errors.New("unauthorized")
+	}
+
+	clubID, err := s.store.ResolveStudentClubID(ctx, studentID)
+	if err != nil {
+		return err
+	}
+
+	oldValues, err := marshalMediaAuditValue(oldValue)
+	if err != nil {
+		return err
+	}
+	newValues, err := marshalMediaAuditValue(newValue)
+	if err != nil {
+		return err
+	}
+	metadataValue, err := marshalMediaAuditMetadata(metadata)
+	if err != nil {
+		return err
+	}
+
+	var actorUserID *string
+	if claims.Subject != "" {
+		actorUserID = &claims.Subject
+	}
+	var clubIDPtr *string
+	if clubID != "" {
+		clubIDPtr = &clubID
+	}
+	var entityID *string
+	if mediaID != "" {
+		entityID = &mediaID
+	}
+
+	return s.store.InsertAuditLog(
+		ctx,
+		actorUserID,
+		clubIDPtr,
+		"student_media",
+		entityID,
+		action,
+		oldValues,
+		newValues,
+		metadataValue,
+	)
+}
+
+func auditStudentMediaValue(row studentMediaRow) map[string]any {
+	return map[string]any{
+		"id":               row.ID,
+		"studentId":        row.StudentID,
+		"mediaType":        row.MediaType,
+		"originalFilename": row.OriginalFilename,
+		"mimeType":         row.MimeType,
+		"fileSize":         row.FileSize,
+		"isPrimary":        row.IsPrimary,
+		"source":           row.Source,
+	}
+}
+
+func marshalMediaAuditValue(value any) (json.RawMessage, error) {
+	if value == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
+}
+
+func marshalMediaAuditMetadata(metadata map[string]any) (json.RawMessage, error) {
+	if metadata == nil {
+		return json.RawMessage(`{}`), nil
+	}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
 }
 
 func (s *Service) storeAvatarBytes(

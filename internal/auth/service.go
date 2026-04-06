@@ -204,6 +204,22 @@ func (s *Service) CreateUser(
 	}
 
 	user := mapUser(row)
+	if err := s.writeAuditLog(
+		ctx,
+		actorUserID,
+		nil,
+		"users",
+		user.ID,
+		"create",
+		nil,
+		user,
+		map[string]any{
+			"systemRole": user.SystemRole,
+			"isActive":   user.IsActive,
+		},
+	); err != nil {
+		return nil, err
+	}
 	return &user, nil
 }
 
@@ -220,6 +236,14 @@ func (s *Service) UpdateUserStatus(
 		return nil, errors.New("you cannot deactivate your own account")
 	}
 
+	existingUserRow, err := s.store.FindUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if existingUserRow == nil {
+		return nil, errors.New("user does not exist")
+	}
+
 	row, err := s.store.UpdateUserActiveStatus(ctx, userID, isActive)
 	if err != nil {
 		return nil, err
@@ -229,6 +253,21 @@ func (s *Service) UpdateUserStatus(
 	}
 
 	user := mapUser(row)
+	if err := s.writeAuditLog(
+		ctx,
+		actorUserID,
+		nil,
+		"users",
+		user.ID,
+		"update_status",
+		mapUser(existingUserRow),
+		user,
+		map[string]any{
+			"isActive": user.IsActive,
+		},
+	); err != nil {
+		return nil, err
+	}
 	return &user, nil
 }
 
@@ -256,6 +295,21 @@ func (s *Service) ResetUserPassword(
 	}
 
 	user := mapUser(row)
+	if err := s.writeAuditLog(
+		ctx,
+		actorUserID,
+		nil,
+		"users",
+		user.ID,
+		"reset_password",
+		nil,
+		nil,
+		map[string]any{
+			"targetUserId": user.ID,
+		},
+	); err != nil {
+		return nil, err
+	}
 	return &user, nil
 }
 
@@ -328,6 +382,23 @@ func (s *Service) AddMembership(
 	}
 
 	membership := mapMembership(row)
+	if err := s.writeAuditLog(
+		ctx,
+		actorUserID,
+		&membership.ClubID,
+		"club_memberships",
+		membership.ID,
+		"create",
+		nil,
+		membership,
+		map[string]any{
+			"userId":   membership.UserID,
+			"clubRole": membership.ClubRole,
+			"isActive": membership.IsActive,
+		},
+	); err != nil {
+		return nil, err
+	}
 	return &membership, nil
 }
 
@@ -426,8 +497,30 @@ func (s *Service) CreateClubInvite(
 		return nil, err
 	}
 
+	invite := mapClubInvite(row)
+	if err := s.writeAuditLog(
+		ctx,
+		actorUserID,
+		&invite.ClubID,
+		"club_invites",
+		invite.ID,
+		"create",
+		nil,
+		invite,
+		map[string]any{
+			"clubRole":      invite.ClubRole,
+			"inviteeEmail":  invite.InviteeEmail,
+			"expiresAt":     invite.ExpiresAt,
+			"maxUses":       invite.MaxUses,
+			"shareMode":     "link",
+			"createdByRole": userRow.SystemRole,
+		},
+	); err != nil {
+		return nil, err
+	}
+
 	return &CreateClubInviteResponse{
-		Invite: mapClubInvite(row),
+		Invite: invite,
 		Token:  rawToken,
 	}, nil
 }
@@ -465,6 +558,21 @@ func (s *Service) RevokeClubInvite(
 	}
 
 	invite := mapClubInvite(row)
+	if err := s.writeAuditLog(
+		ctx,
+		actorUserID,
+		&invite.ClubID,
+		"club_invites",
+		invite.ID,
+		"revoke",
+		mapClubInvite(inviteRow),
+		invite,
+		map[string]any{
+			"inviteeEmail": invite.InviteeEmail,
+		},
+	); err != nil {
+		return nil, err
+	}
 	return &invite, nil
 }
 
@@ -548,12 +656,52 @@ func (s *Service) AcceptClubInvite(
 		return nil, err
 	}
 	if existingMembership == nil {
-		if _, err := s.store.CreateMembership(ctx, userRow.ID, row.ClubID, row.ClubRole, true); err != nil {
+		createdMembership, err := s.store.CreateMembership(ctx, userRow.ID, row.ClubID, row.ClubRole, true)
+		if err != nil {
+			return nil, err
+		}
+		membership := mapMembership(createdMembership)
+		if err := s.writeAuditLog(
+			ctx,
+			userRow.ID,
+			&membership.ClubID,
+			"club_memberships",
+			membership.ID,
+			"create_from_invite",
+			nil,
+			membership,
+			map[string]any{
+				"userId":   membership.UserID,
+				"clubRole": membership.ClubRole,
+				"source":   "invite_accept",
+			},
+		); err != nil {
 			return nil, err
 		}
 	}
 
-	if _, err := s.store.AcceptClubInvite(ctx, row.ID, userRow.ID); err != nil {
+	acceptedInviteRow, err := s.store.AcceptClubInvite(ctx, row.ID, userRow.ID)
+	if err != nil {
+		return nil, err
+	}
+	if acceptedInviteRow == nil {
+		return nil, errors.New("invite does not exist")
+	}
+	acceptedInvite := mapClubInvite(acceptedInviteRow)
+	if err := s.writeAuditLog(
+		ctx,
+		userRow.ID,
+		&acceptedInvite.ClubID,
+		"club_invites",
+		acceptedInvite.ID,
+		"accept",
+		mapClubInvite(row),
+		acceptedInvite,
+		map[string]any{
+			"acceptedByUserId": userRow.ID,
+			"acceptedByEmail":  userRow.Email,
+		},
+	); err != nil {
 		return nil, err
 	}
 
@@ -602,6 +750,21 @@ func (s *Service) RemoveMembership(
 	}
 
 	membership := mapMembership(row)
+	if err := s.writeAuditLog(
+		ctx,
+		actorUserID,
+		&membership.ClubID,
+		"club_memberships",
+		membership.ID,
+		"revoke",
+		membership,
+		nil,
+		map[string]any{
+			"userId": membership.UserID,
+		},
+	); err != nil {
+		return nil, err
+	}
 	return &membership, nil
 }
 
@@ -647,6 +810,47 @@ func (s *Service) GetClubPermissions(
 		IsSystemRole: false,
 		Permissions:  EvaluatePermissions(userRow.SystemRole, membershipRow.ClubRole),
 	}, nil
+}
+
+func (s *Service) ListAuditLogs(
+	ctx context.Context,
+	actorUserID string,
+	query ListAuditLogsQuery,
+) (*ListAuditLogsResponse, error) {
+	userRow, err := s.store.FindUserByID(ctx, actorUserID)
+	if err != nil {
+		return nil, err
+	}
+	if userRow == nil || !userRow.IsActive {
+		return nil, errors.New("user does not exist")
+	}
+
+	var allowedClubIDs []string
+	if userRow.SystemRole != SystemRoleSysAdmin {
+		if strings.TrimSpace(query.ClubID) == "" {
+			return nil, errors.New("clubId is required")
+		}
+
+		membershipRow, err := s.store.FindMembershipByUserAndClub(ctx, actorUserID, query.ClubID)
+		if err != nil {
+			return nil, err
+		}
+		if membershipRow == nil || !membershipRow.IsActive || membershipRow.ClubRole != ClubRoleOwner {
+			return nil, errors.New("forbidden")
+		}
+		allowedClubIDs = []string{membershipRow.ClubID}
+	}
+
+	rows, err := s.store.ListAuditLogs(ctx, query, allowedClubIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]AuditLog, 0, len(rows))
+	for i := range rows {
+		items = append(items, mapAuditLog(&rows[i]))
+	}
+	return &ListAuditLogsResponse{Items: items}, nil
 }
 
 func (s *Service) ParseToken(token string) (*Claims, error) {
@@ -780,6 +984,90 @@ func mapClubInvite(row *clubInviteRow) ClubInvite {
 		CreatedAt:        row.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:        row.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
+}
+
+func mapAuditLog(row *auditLogRow) AuditLog {
+	return AuditLog{
+		ID:          row.ID,
+		ActorUserID: row.ActorUserID,
+		ClubID:      row.ClubID,
+		EntityType:  row.EntityType,
+		EntityID:    row.EntityID,
+		Action:      row.Action,
+		OldValues:   row.OldValues,
+		NewValues:   row.NewValues,
+		Metadata:    row.Metadata,
+		CreatedAt:   row.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+func (s *Service) writeAuditLog(
+	ctx context.Context,
+	actorUserID string,
+	clubID *string,
+	entityType string,
+	entityID string,
+	action string,
+	oldValue any,
+	newValue any,
+	metadata map[string]any,
+) error {
+	oldValues, err := marshalAuditValue(oldValue)
+	if err != nil {
+		return err
+	}
+	newValues, err := marshalAuditValue(newValue)
+	if err != nil {
+		return err
+	}
+	metadataValue, err := marshalAuditMetadata(metadata)
+	if err != nil {
+		return err
+	}
+
+	var actorID *string
+	if trimmed := strings.TrimSpace(actorUserID); trimmed != "" {
+		actorID = &trimmed
+	}
+
+	var entityIDPtr *string
+	if trimmed := strings.TrimSpace(entityID); trimmed != "" {
+		entityIDPtr = &trimmed
+	}
+
+	return s.store.InsertAuditLog(
+		ctx,
+		actorID,
+		clubID,
+		entityType,
+		entityIDPtr,
+		action,
+		oldValues,
+		newValues,
+		metadataValue,
+	)
+}
+
+func marshalAuditValue(value any) (json.RawMessage, error) {
+	if value == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
+}
+
+func marshalAuditMetadata(metadata map[string]any) (json.RawMessage, error) {
+	if metadata == nil {
+		return json.RawMessage(`{}`), nil
+	}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
 }
 
 func formatOptionalTime(value *time.Time) *string {

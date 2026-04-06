@@ -2,9 +2,12 @@ package media
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -156,6 +159,52 @@ func (s *Store) ResolveStudentClubID(ctx context.Context, studentID string) (str
 		return "", err
 	}
 	return clubID, nil
+}
+
+func (s *Store) InsertAuditLog(
+	ctx context.Context,
+	actorUserID *string,
+	clubID *string,
+	entityType string,
+	entityID *string,
+	action string,
+	oldValues json.RawMessage,
+	newValues json.RawMessage,
+	metadata json.RawMessage,
+) error {
+	_, err := s.pool.Exec(
+		ctx,
+		`INSERT INTO audit_logs (
+			id, actor_user_id, club_id, entity_type, entity_id, action,
+			old_values, new_values, metadata, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		uuid.NewString(),
+		actorUserID,
+		clubID,
+		strings.TrimSpace(entityType),
+		entityID,
+		strings.TrimSpace(action),
+		nullableJSONBValue(oldValues),
+		nullableJSONBValue(newValues),
+		requiredJSONBValue(metadata),
+		time.Now().UTC(),
+	)
+	return err
+}
+
+func nullableJSONBValue(raw []byte) *string {
+	if len(raw) == 0 {
+		return nil
+	}
+	value := string(raw)
+	return &value
+}
+
+func requiredJSONBValue(raw []byte) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	return string(raw)
 }
 
 func (s *Store) InsertStudentMedia(ctx context.Context, row studentMediaRow) error {

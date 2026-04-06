@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -31,5 +32,6 @@ type Store interface {
 	ResolveAttendanceSessionClubIDCurrent(ctx context.Context, sessionID string) (string, error)
 	NextStudentCode(ctx context.Context, tx pgx.Tx) (string, error)
 	FindActiveStudentProfileByCode(ctx context.Context, studentCode string) (*StudentPublicProfile, error)
+	InsertAuditLog(ctx context.Context, tx pgx.Tx, actorUserID *string, clubID *string, entityType string, entityID *string, action string, oldValues json.RawMessage, newValues json.RawMessage, metadata json.RawMessage) error
 	ListAllCurrent(ctx context.Context) ([]ClubRecord, []ClubGroupRecord, []ClubScheduleRecord, []BeltRankRecord, []StudentRecord, []StudentScheduleProfileRecord, []StudentScheduleRecord, []AttendanceSessionRecord, []AttendanceRecord, error)
 }

@@ -137,6 +137,14 @@ func (s *Service) ImportClubs(ctx context.Context, file io.Reader) (ImportClubsR
 		changedIDs = append(changedIDs, row.id)
 	}
 
+	if err := s.insertImportAuditLog(ctx, tx, string(EntityClubs), "import", map[string]any{
+		"importedCount": importedCount,
+		"errorCount":    len(rowErrors),
+		"rowCount":      len(parsedRows),
+	}); err != nil {
+		return ImportClubsResponse{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return ImportClubsResponse{}, err
 	}

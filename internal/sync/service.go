@@ -74,7 +74,8 @@ func (s *Service) Push(ctx context.Context, request PushRequest) (PushResponse, 
 			return PushResponse{}, err
 		}
 
-		if err := s.authorizeMutation(ctx, tx, claims, mutation, existing); err != nil {
+		scope, err := s.authorizeMutation(ctx, tx, claims, mutation, existing)
+		if err != nil {
 			if conflict, ok := err.(conflictError); ok {
 				response.Conflicts = append(response.Conflicts, Conflict{
 					MutationID: mutation.MutationID,
@@ -131,6 +132,18 @@ func (s *Service) Push(ctx context.Context, request PushRequest) (PushResponse, 
 		if err := s.store.SaveProcessedMutation(ctx, tx, request.DeviceID, mutation, now); err != nil {
 			return PushResponse{}, err
 		}
+		if err := s.writeMutationAuditLog(
+			ctx,
+			tx,
+			claims.Subject,
+			request.DeviceID,
+			scope,
+			mutation,
+			existing,
+			canonicalPayload,
+		); err != nil {
+			return PushResponse{}, err
+		}
 
 		response.Applied = append(response.Applied, AppliedRecord{
 			EntityName:       mutation.EntityName,
@@ -158,30 +171,131 @@ func (s *Service) authorizeMutation(
 	claims *auth.Claims,
 	mutation SyncMutation,
 	existing *StoredRecord,
-) error {
+) (RecordScope, error) {
 	scope, err := s.ResolveMutationScope(ctx, tx, mutation, existing)
 	if err != nil {
-		return err
+		return RecordScope{}, err
 	}
 
 	permission := requiredMutationPermission(mutation)
 	if permission == "" {
-		return nil
+		return scope, nil
 	}
 
 	clubID := scope.ClubID
 	permissions, err := s.authorizer.GetClubPermissions(ctx, claims.Subject, clubID)
 	if err != nil {
-		return err
+		return RecordScope{}, err
 	}
 	if permissions.Permissions[permission] {
-		return nil
+		return scope, nil
 	}
 
-	return conflictError{
+	return RecordScope{}, conflictError{
 		reason:  "forbidden",
 		message: fmt.Sprintf("You do not have permission to %s for this record.", permission),
 	}
+}
+
+func (s *Service) writeMutationAuditLog(
+	ctx context.Context,
+	tx pgx.Tx,
+	actorUserID string,
+	deviceID string,
+	scope RecordScope,
+	mutation SyncMutation,
+	existing *StoredRecord,
+	canonicalPayload []byte,
+) error {
+	action := mutationAuditAction(mutation, existing)
+	oldValues := auditRecordPayload(existing)
+	newValues := auditNewValues(mutation.Operation, canonicalPayload)
+	metadata, err := json.Marshal(map[string]any{
+		"deviceId":         deviceID,
+		"mutationId":       mutation.MutationID,
+		"operation":        mutation.Operation,
+		"clientModifiedAt": mutation.ClientModifiedAt,
+	})
+	if err != nil {
+		return err
+	}
+
+	var actorID *string
+	if actorUserID != "" {
+		actorID = &actorUserID
+	}
+	var clubID *string
+	if !scope.IsGlobal && scope.ClubID != "" {
+		clubID = &scope.ClubID
+	}
+	recordID := mutation.RecordID
+
+	return s.store.InsertAuditLog(
+		ctx,
+		tx,
+		actorID,
+		clubID,
+		string(mutation.EntityName),
+		&recordID,
+		action,
+		oldValues,
+		newValues,
+		metadata,
+	)
+}
+
+func mutationAuditAction(mutation SyncMutation, existing *StoredRecord) string {
+	if mutation.Operation == OperationDelete {
+		return "delete"
+	}
+	if existing == nil || existing.DeletedAt != nil {
+		return "create"
+	}
+	return "update"
+}
+
+func auditRecordPayload(record *StoredRecord) json.RawMessage {
+	if record == nil || len(record.Payload) == 0 {
+		return nil
+	}
+	return json.RawMessage(record.Payload)
+}
+
+func auditNewValues(operation Operation, canonicalPayload []byte) json.RawMessage {
+	if operation == OperationDelete || len(canonicalPayload) == 0 {
+		return nil
+	}
+	return json.RawMessage(canonicalPayload)
+}
+
+func (s *Service) insertImportAuditLog(
+	ctx context.Context,
+	tx pgx.Tx,
+	entityType string,
+	action string,
+	metadata map[string]any,
+) error {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil || claims.Subject == "" {
+		return errors.New("unauthorized")
+	}
+	metadataValue, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	actorUserID := claims.Subject
+	return s.store.InsertAuditLog(
+		ctx,
+		tx,
+		&actorUserID,
+		nil,
+		entityType,
+		nil,
+		action,
+		nil,
+		nil,
+		json.RawMessage(metadataValue),
+	)
 }
 
 func requiredMutationPermission(mutation SyncMutation) string {

@@ -1,5 +1,7 @@
 package auth
 
+import "encoding/json"
+
 type User struct {
 	ID          string  `json:"id"`
 	Email       string  `json:"email"`
@@ -126,6 +128,30 @@ type AcceptClubInviteRequest struct {
 	Email    string `json:"email"`
 	FullName string `json:"fullName,omitempty"`
 	Password string `json:"password"`
+}
+
+type AuditLog struct {
+	ID          string          `json:"id"`
+	ActorUserID *string         `json:"actorUserId,omitempty"`
+	ClubID      *string         `json:"clubId,omitempty"`
+	EntityType  string          `json:"entityType"`
+	EntityID    *string         `json:"entityId,omitempty"`
+	Action      string          `json:"action"`
+	OldValues   json.RawMessage `json:"oldValues,omitempty"`
+	NewValues   json.RawMessage `json:"newValues,omitempty"`
+	Metadata    json.RawMessage `json:"metadata"`
+	CreatedAt   string          `json:"createdAt"`
+}
+
+type ListAuditLogsResponse struct {
+	Items []AuditLog `json:"items"`
+}
+
+type ListAuditLogsQuery struct {
+	ClubID     string
+	EntityType string
+	EntityID   string
+	Limit      int
 }
 
 type Claims struct {

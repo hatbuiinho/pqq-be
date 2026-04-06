@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -56,6 +57,19 @@ type clubInviteRow struct {
 	RevokedAt        *time.Time
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+type auditLogRow struct {
+	ID          string
+	ActorUserID *string
+	ClubID      *string
+	EntityType  string
+	EntityID    *string
+	Action      string
+	OldValues   []byte
+	NewValues   []byte
+	Metadata    []byte
+	CreatedAt   time.Time
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -820,4 +834,103 @@ func (s *Store) AcceptClubInvite(
 		return nil, err
 	}
 	return &row, nil
+}
+
+func (s *Store) InsertAuditLog(
+	ctx context.Context,
+	actorUserID *string,
+	clubID *string,
+	entityType string,
+	entityID *string,
+	action string,
+	oldValues json.RawMessage,
+	newValues json.RawMessage,
+	metadata json.RawMessage,
+) error {
+	now := time.Now().UTC()
+	_, err := s.pool.Exec(
+		ctx,
+		`INSERT INTO audit_logs (
+			id, actor_user_id, club_id, entity_type, entity_id, action,
+			old_values, new_values, metadata, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		uuid.NewString(),
+		actorUserID,
+		clubID,
+		strings.TrimSpace(entityType),
+		entityID,
+		strings.TrimSpace(action),
+		nullableJSONBValue(oldValues),
+		nullableJSONBValue(newValues),
+		requiredJSONBValue(metadata),
+		now,
+	)
+	return err
+}
+
+func (s *Store) ListAuditLogs(ctx context.Context, query ListAuditLogsQuery, clubIDs []string) ([]auditLogRow, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+
+	rows, err := s.pool.Query(
+		ctx,
+		`SELECT id, actor_user_id, club_id, entity_type, entity_id, action,
+		        old_values, new_values, metadata, created_at
+		   FROM audit_logs
+		  WHERE ($1::boolean OR club_id = ANY($2))
+		    AND ($3::text = '' OR COALESCE(club_id, '') = $3)
+		    AND ($4::text = '' OR entity_type = $4)
+		    AND ($5::text = '' OR COALESCE(entity_id, '') = $5)
+		  ORDER BY created_at DESC
+		  LIMIT $6`,
+		len(clubIDs) == 0,
+		clubIDs,
+		strings.TrimSpace(query.ClubID),
+		strings.TrimSpace(query.EntityType),
+		strings.TrimSpace(query.EntityID),
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]auditLogRow, 0, limit)
+	for rows.Next() {
+		var row auditLogRow
+		if err := rows.Scan(
+			&row.ID,
+			&row.ActorUserID,
+			&row.ClubID,
+			&row.EntityType,
+			&row.EntityID,
+			&row.Action,
+			&row.OldValues,
+			&row.NewValues,
+			&row.Metadata,
+			&row.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+
+	return result, rows.Err()
+}
+
+func nullableJSONBValue(raw json.RawMessage) *string {
+	if len(raw) == 0 {
+		return nil
+	}
+	value := string(raw)
+	return &value
+}
+
+func requiredJSONBValue(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	return string(raw)
 }

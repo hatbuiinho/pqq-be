@@ -38,6 +38,7 @@ func New(
 		authenticated.GET("/auth/me", authHandler.Me)
 		authenticated.GET("/auth/memberships", authHandler.Memberships)
 		authenticated.GET("/auth/clubs/:clubId/permissions", authHandler.ClubPermissions)
+		authenticated.GET("/auth/audit-logs", authHandler.ListAuditLogs)
 		authenticated.GET("/auth/users", authHandler.ListUsers)
 		authenticated.POST("/auth/users", authHandler.CreateUser)
 		authenticated.POST("/auth/users/:userId/status", authHandler.UpdateUserStatus)

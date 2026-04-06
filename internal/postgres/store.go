@@ -11,6 +11,7 @@ import (
 	"pqq/be/internal/postgres/db"
 	"pqq/be/internal/sync"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -143,6 +144,38 @@ func (s *SyncStore) ListChangesSince(ctx context.Context, since string, limit in
 	}
 
 	return records, rows.Err()
+}
+
+func (s *SyncStore) InsertAuditLog(
+	ctx context.Context,
+	tx pgx.Tx,
+	actorUserID *string,
+	clubID *string,
+	entityType string,
+	entityID *string,
+	action string,
+	oldValues json.RawMessage,
+	newValues json.RawMessage,
+	metadata json.RawMessage,
+) error {
+	_, err := tx.Exec(
+		ctx,
+		`INSERT INTO audit_logs (
+			id, actor_user_id, club_id, entity_type, entity_id, action,
+			old_values, new_values, metadata, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		newRecordID(),
+		actorUserID,
+		clubID,
+		strings.TrimSpace(entityType),
+		entityID,
+		strings.TrimSpace(action),
+		nullableJSONBValue(oldValues),
+		nullableJSONBValue(newValues),
+		requiredJSONBValue(metadata),
+		time.Now().UTC(),
+	)
+	return err
 }
 
 func (s *SyncStore) IsMutationProcessed(ctx context.Context, tx pgx.Tx, deviceID string, mutationID string) (bool, error) {
@@ -1741,8 +1774,38 @@ func insertChangeLog(ctx context.Context, tx pgx.Tx, record sync.StoredRecord) e
 		return err
 	}
 
-	_, err = tx.Exec(ctx, query, record.EntityName, record.RecordID, record.Payload, serverModifiedAt)
+	_, err = tx.Exec(
+		ctx,
+		query,
+		record.EntityName,
+		record.RecordID,
+		jsonbValue(record.Payload),
+		serverModifiedAt,
+	)
 	return err
+}
+
+func jsonbValue(raw []byte) string {
+	return string(raw)
+}
+
+func nullableJSONBValue(raw []byte) *string {
+	if len(raw) == 0 {
+		return nil
+	}
+	value := jsonbValue(raw)
+	return &value
+}
+
+func requiredJSONBValue(raw []byte) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	return jsonbValue(raw)
+}
+
+func newRecordID() string {
+	return uuid.NewString()
 }
 
 func parseSyncCursor(cursor string) (*time.Time, int64, error) {

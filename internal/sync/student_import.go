@@ -93,6 +93,7 @@ func (s *Service) ImportStudents(ctx context.Context, file io.Reader) (ImportStu
 	changedEntityNames := make([]EntityName, 0, len(parsedRows)*3)
 	changedIDs := make([]string, 0, len(parsedRows)*3)
 	permissionCache := make(map[string]map[string]bool)
+	importedClubIDs := make(map[string]struct{})
 
 	for _, row := range parsedRows {
 		clubRecord, err := s.store.FindClubByCode(ctx, tx, row.clubName, "")
@@ -245,6 +246,7 @@ func (s *Service) ImportStudents(ctx context.Context, file io.Reader) (ImportStu
 		}
 
 		importedCount += 1
+		importedClubIDs[club.ID] = struct{}{}
 		changedEntityNames = append(changedEntityNames, EntityStudents, EntityStudentScheduleProfiles)
 		changedIDs = append(changedIDs, recordID, recordID)
 		for _, weekday := range row.scheduleDays {
@@ -252,6 +254,19 @@ func (s *Service) ImportStudents(ctx context.Context, file io.Reader) (ImportStu
 			changedIDs = append(changedIDs, fmt.Sprintf("%s:%s", recordID, weekday))
 		}
 	nextRow:
+	}
+
+	clubIDs := make([]string, 0, len(importedClubIDs))
+	for clubID := range importedClubIDs {
+		clubIDs = append(clubIDs, clubID)
+	}
+	if err := s.insertImportAuditLog(ctx, tx, string(EntityStudents), "import", map[string]any{
+		"importedCount": importedCount,
+		"errorCount":    len(rowErrors),
+		"rowCount":      len(parsedRows),
+		"clubIds":       clubIDs,
+	}); err != nil {
+		return ImportStudentsResponse{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {

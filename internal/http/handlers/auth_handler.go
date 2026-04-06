@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"pqq/be/internal/auth"
@@ -81,6 +82,37 @@ func (h *AuthHandler) ClubPermissions(c *gin.Context) {
 	response, err := h.service.GetClubPermissions(c.Request.Context(), claims.Subject, clubID)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *AuthHandler) ListAuditLogs(c *gin.Context) {
+	claims, ok := claimsFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	limit := 50
+	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed < 1 || parsed > 200 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 200"})
+			return
+		}
+		limit = parsed
+	}
+
+	response, err := h.service.ListAuditLogs(c.Request.Context(), claims.Subject, auth.ListAuditLogsQuery{
+		ClubID:     strings.TrimSpace(c.Query("clubId")),
+		EntityType: strings.TrimSpace(c.Query("entityType")),
+		EntityID:   strings.TrimSpace(c.Query("entityId")),
+		Limit:      limit,
+	})
+	if err != nil {
+		handleAuthServiceError(c, err)
 		return
 	}
 
