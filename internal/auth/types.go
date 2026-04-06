@@ -93,6 +93,8 @@ type ClubInvite struct {
 	LastUsedAt       *string `json:"lastUsedAt,omitempty"`
 	AcceptedAt       *string `json:"acceptedAt,omitempty"`
 	AcceptedByUserID *string `json:"acceptedByUserId,omitempty"`
+	AcceptedByName   *string `json:"acceptedByName,omitempty"`
+	AcceptedByEmail  *string `json:"acceptedByEmail,omitempty"`
 	RevokedAt        *string `json:"revokedAt,omitempty"`
 	CreatedAt        string  `json:"createdAt"`
 	UpdatedAt        string  `json:"updatedAt"`

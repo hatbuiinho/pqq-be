@@ -980,6 +980,8 @@ func mapClubInvite(row *clubInviteRow) ClubInvite {
 		LastUsedAt:       formatOptionalTime(row.LastUsedAt),
 		AcceptedAt:       formatOptionalTime(row.AcceptedAt),
 		AcceptedByUserID: row.AcceptedByUserID,
+		AcceptedByName:   row.AcceptedByName,
+		AcceptedByEmail:  row.AcceptedByEmail,
 		RevokedAt:        formatOptionalTime(row.RevokedAt),
 		CreatedAt:        row.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:        row.UpdatedAt.UTC().Format(time.RFC3339Nano),

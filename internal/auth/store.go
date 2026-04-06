@@ -54,6 +54,8 @@ type clubInviteRow struct {
 	LastUsedAt       *time.Time
 	AcceptedAt       *time.Time
 	AcceptedByUserID *string
+	AcceptedByName   *string
+	AcceptedByEmail  *string
 	RevokedAt        *time.Time
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
@@ -546,11 +548,13 @@ func (s *Store) ListClubInvites(ctx context.Context, clubIDs []string) ([]clubIn
 		ctx,
 		`SELECT ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
 		        ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
-		        ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		        ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, accepted_user.full_name,
+		        accepted_user.email, ci.revoked_at,
 		        ci.created_at, ci.updated_at
 		   FROM club_invites ci
 		   INNER JOIN clubs c ON c.id = ci.club_id
 		   INNER JOIN users u ON u.id = ci.inviter_user_id
+		   LEFT JOIN users accepted_user ON accepted_user.id = ci.accepted_by_user_id
 		  WHERE ci.club_id = ANY($1)
 		  ORDER BY ci.created_at DESC`,
 		clubIDs,
@@ -578,6 +582,8 @@ func (s *Store) ListClubInvites(ctx context.Context, clubIDs []string) ([]clubIn
 			&row.LastUsedAt,
 			&row.AcceptedAt,
 			&row.AcceptedByUserID,
+			&row.AcceptedByName,
+			&row.AcceptedByEmail,
 			&row.RevokedAt,
 			&row.CreatedAt,
 			&row.UpdatedAt,
@@ -613,7 +619,10 @@ func (s *Store) CreateClubInvite(
 			inviter_user_id,
 			(SELECT full_name FROM users WHERE id = $3),
 			invitee_email, club_role, token_hash, expires_at, max_uses, use_count,
-			last_used_at, accepted_at, accepted_by_user_id, revoked_at, created_at, updated_at`,
+			last_used_at, accepted_at, accepted_by_user_id,
+			(SELECT full_name FROM users WHERE id = accepted_by_user_id),
+			(SELECT email FROM users WHERE id = accepted_by_user_id),
+			revoked_at, created_at, updated_at`,
 		uuid.NewString(),
 		clubID,
 		inviterUserID,
@@ -638,6 +647,8 @@ func (s *Store) CreateClubInvite(
 		&row.LastUsedAt,
 		&row.AcceptedAt,
 		&row.AcceptedByUserID,
+		&row.AcceptedByName,
+		&row.AcceptedByEmail,
 		&row.RevokedAt,
 		&row.CreatedAt,
 		&row.UpdatedAt,
@@ -655,11 +666,13 @@ func (s *Store) FindClubInviteByID(ctx context.Context, inviteID string) (*clubI
 		ctx,
 		`SELECT ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
 		        ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
-		        ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		        ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, accepted_user.full_name,
+		        accepted_user.email, ci.revoked_at,
 		        ci.created_at, ci.updated_at
 		   FROM club_invites ci
 		   INNER JOIN clubs c ON c.id = ci.club_id
 		   INNER JOIN users u ON u.id = ci.inviter_user_id
+		   LEFT JOIN users accepted_user ON accepted_user.id = ci.accepted_by_user_id
 		  WHERE ci.id = $1
 		  LIMIT 1`,
 		inviteID,
@@ -678,6 +691,8 @@ func (s *Store) FindClubInviteByID(ctx context.Context, inviteID string) (*clubI
 		&row.LastUsedAt,
 		&row.AcceptedAt,
 		&row.AcceptedByUserID,
+		&row.AcceptedByName,
+		&row.AcceptedByEmail,
 		&row.RevokedAt,
 		&row.CreatedAt,
 		&row.UpdatedAt,
@@ -697,11 +712,13 @@ func (s *Store) FindActiveClubInviteByTokenHash(ctx context.Context, tokenHash s
 		ctx,
 		`SELECT ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
 		        ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
-		        ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		        ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, accepted_user.full_name,
+		        accepted_user.email, ci.revoked_at,
 		        ci.created_at, ci.updated_at
 		   FROM club_invites ci
 		   INNER JOIN clubs c ON c.id = ci.club_id
 		   INNER JOIN users u ON u.id = ci.inviter_user_id
+		   LEFT JOIN users accepted_user ON accepted_user.id = ci.accepted_by_user_id
 		  WHERE ci.token_hash = $1
 		    AND ci.revoked_at IS NULL
 		    AND ci.accepted_at IS NULL
@@ -722,6 +739,8 @@ func (s *Store) FindActiveClubInviteByTokenHash(ctx context.Context, tokenHash s
 		&row.LastUsedAt,
 		&row.AcceptedAt,
 		&row.AcceptedByUserID,
+		&row.AcceptedByName,
+		&row.AcceptedByEmail,
 		&row.RevokedAt,
 		&row.CreatedAt,
 		&row.UpdatedAt,
@@ -751,7 +770,10 @@ func (s *Store) RevokeClubInvite(ctx context.Context, inviteID string) (*clubInv
 		    AND ci.accepted_at IS NULL
 		RETURNING ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
 		          ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
-		          ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		          ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id,
+		          (SELECT full_name FROM users WHERE id = ci.accepted_by_user_id),
+		          (SELECT email FROM users WHERE id = ci.accepted_by_user_id),
+		          ci.revoked_at,
 		          ci.created_at, ci.updated_at`,
 		inviteID,
 		now,
@@ -770,6 +792,8 @@ func (s *Store) RevokeClubInvite(ctx context.Context, inviteID string) (*clubInv
 		&row.LastUsedAt,
 		&row.AcceptedAt,
 		&row.AcceptedByUserID,
+		&row.AcceptedByName,
+		&row.AcceptedByEmail,
 		&row.RevokedAt,
 		&row.CreatedAt,
 		&row.UpdatedAt,
@@ -804,7 +828,10 @@ func (s *Store) AcceptClubInvite(
 		    AND ci.inviter_user_id = u.id
 		RETURNING ci.id, ci.club_id, c.name, ci.inviter_user_id, u.full_name, ci.invitee_email,
 		          ci.club_role, ci.token_hash, ci.expires_at, ci.max_uses, ci.use_count,
-		          ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id, ci.revoked_at,
+		          ci.last_used_at, ci.accepted_at, ci.accepted_by_user_id,
+		          (SELECT full_name FROM users WHERE id = ci.accepted_by_user_id),
+		          (SELECT email FROM users WHERE id = ci.accepted_by_user_id),
+		          ci.revoked_at,
 		          ci.created_at, ci.updated_at`,
 		inviteID,
 		acceptedByUserID,
@@ -824,6 +851,8 @@ func (s *Store) AcceptClubInvite(
 		&row.LastUsedAt,
 		&row.AcceptedAt,
 		&row.AcceptedByUserID,
+		&row.AcceptedByName,
+		&row.AcceptedByEmail,
 		&row.RevokedAt,
 		&row.CreatedAt,
 		&row.UpdatedAt,
