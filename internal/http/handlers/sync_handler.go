@@ -33,6 +33,22 @@ func (h *SyncHandler) Push(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *SyncHandler) PushAttendanceActions(c *gin.Context) {
+	var request sync.AttendanceActionPushRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	response, err := h.service.PushAttendanceActions(c.Request.Context(), request)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *SyncHandler) ImportBeltRanks(c *gin.Context) {
 	file, _, err := c.Request.FormFile("file")
 	if err != nil {

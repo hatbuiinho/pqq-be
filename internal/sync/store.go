@@ -21,8 +21,10 @@ type Store interface {
 	FindBeltRankByOrder(ctx context.Context, tx pgx.Tx, order int, excludeID string) (*StoredRecord, error)
 	FindBeltRankByName(ctx context.Context, tx pgx.Tx, beltRankName string) (*StoredRecord, error)
 	FindStudentByCode(ctx context.Context, tx pgx.Tx, studentCode string, excludeID string) (*StoredRecord, error)
+	ResolveUserFullName(ctx context.Context, tx pgx.Tx, userID string) (string, error)
 	FindStudentScheduleByWeekday(ctx context.Context, tx pgx.Tx, studentID string, weekday string, excludeID string) (*StoredRecord, error)
 	FindAttendanceRecordBySessionAndStudent(ctx context.Context, tx pgx.Tx, sessionID string, studentID string, excludeID string) (*StoredRecord, error)
+	ListAttendanceRecordsBySessionForUpdate(ctx context.Context, tx pgx.Tx, sessionID string) ([]StoredRecord, error)
 	ListClubScheduleWeekdays(ctx context.Context, tx pgx.Tx, clubID string) ([]string, error)
 	ReplaceStudentSchedule(ctx context.Context, tx pgx.Tx, studentID string, mode string, weekdays []string, serverNow string) error
 	RecordExists(ctx context.Context, tx pgx.Tx, entityName EntityName, recordID string) (bool, error)
@@ -33,5 +35,5 @@ type Store interface {
 	NextStudentCode(ctx context.Context, tx pgx.Tx) (string, error)
 	FindActiveStudentProfileByCode(ctx context.Context, studentCode string) (*StudentPublicProfile, error)
 	InsertAuditLog(ctx context.Context, tx pgx.Tx, actorUserID *string, clubID *string, entityType string, entityID *string, action string, oldValues json.RawMessage, newValues json.RawMessage, metadata json.RawMessage) error
-	ListAllCurrent(ctx context.Context) ([]ClubRecord, []ClubGroupRecord, []ClubScheduleRecord, []BeltRankRecord, []StudentRecord, []StudentScheduleProfileRecord, []StudentScheduleRecord, []AttendanceSessionRecord, []AttendanceRecord, error)
+	ListAllCurrent(ctx context.Context) ([]ClubRecord, []ClubGroupRecord, []ClubScheduleRecord, []BeltRankRecord, []StudentRecord, []StudentMessageRecord, []StudentScheduleProfileRecord, []StudentScheduleRecord, []AttendanceSessionRecord, []AttendanceRecord, error)
 }

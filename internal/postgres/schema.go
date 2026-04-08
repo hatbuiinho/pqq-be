@@ -410,6 +410,121 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_club_id_created_at
 
 CREATE INDEX IF NOT EXISTS idx_audit_logs_entity
 	ON audit_logs (entity_type, entity_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS student_messages (
+	id TEXT PRIMARY KEY,
+	student_id TEXT NOT NULL REFERENCES students(id),
+	club_id TEXT NOT NULL REFERENCES clubs(id),
+	message_type TEXT NOT NULL,
+	content TEXT NOT NULL,
+	author_user_id TEXT NULL REFERENCES users(id),
+	author_name TEXT NOT NULL,
+	attendance_session_id TEXT NULL REFERENCES attendance_sessions(id),
+	attendance_record_id TEXT NULL REFERENCES attendance_records(id),
+	attendance_session_date DATE NULL,
+	attendance_status TEXT NULL,
+	created_at TIMESTAMPTZ NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL,
+	last_modified_at TIMESTAMPTZ NOT NULL,
+	deleted_at TIMESTAMPTZ NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_student_messages_student_id
+	ON student_messages (student_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_student_messages_club_id
+	ON student_messages (club_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_student_messages_attendance_record_id
+	ON student_messages (attendance_record_id)
+	WHERE attendance_record_id IS NOT NULL AND deleted_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_student_messages_attendance_note_unique
+	ON student_messages (attendance_record_id)
+	WHERE message_type = 'attendance_note' AND deleted_at IS NULL;
+
+ALTER TABLE student_messages
+	ALTER COLUMN author_user_id DROP NOT NULL;
+
+WITH inserted_student_messages AS (
+	INSERT INTO student_messages (
+		id,
+		student_id,
+		club_id,
+		message_type,
+		content,
+		author_user_id,
+		author_name,
+		attendance_session_id,
+		attendance_record_id,
+		attendance_session_date,
+		attendance_status,
+		created_at,
+		updated_at,
+		last_modified_at,
+		deleted_at
+	)
+	SELECT
+		'attendance-note-' || ar.id,
+		ar.student_id,
+		ats.club_id,
+		'attendance_note',
+		BTRIM(ar.notes),
+		NULL,
+		'Hệ thống',
+		ar.session_id,
+		ar.id,
+		ats.session_date,
+		ar.attendance_status,
+		ar.last_modified_at,
+		ar.updated_at,
+		ar.last_modified_at,
+		NULL
+	FROM attendance_records ar
+	INNER JOIN attendance_sessions ats ON ats.id = ar.session_id
+	WHERE ar.deleted_at IS NULL
+		AND ats.deleted_at IS NULL
+		AND NULLIF(BTRIM(ar.notes), '') IS NOT NULL
+	ON CONFLICT (id) DO NOTHING
+	RETURNING
+		id,
+		student_id,
+		club_id,
+		message_type,
+		content,
+		author_user_id,
+		author_name,
+		attendance_session_id,
+		attendance_record_id,
+		attendance_session_date,
+		attendance_status,
+		created_at,
+		updated_at,
+		last_modified_at
+)
+INSERT INTO sync_change_log (entity_name, record_id, payload, server_modified_at)
+SELECT
+	'student_messages',
+	inserted_student_messages.id,
+	jsonb_build_object(
+		'id', inserted_student_messages.id,
+		'studentId', inserted_student_messages.student_id,
+		'clubId', inserted_student_messages.club_id,
+		'messageType', inserted_student_messages.message_type,
+		'content', inserted_student_messages.content,
+		'authorUserId', inserted_student_messages.author_user_id,
+		'authorName', inserted_student_messages.author_name,
+		'attendanceSessionId', inserted_student_messages.attendance_session_id,
+		'attendanceRecordId', inserted_student_messages.attendance_record_id,
+		'attendanceSessionDate', TO_CHAR(inserted_student_messages.attendance_session_date, 'YYYY-MM-DD'),
+		'attendanceStatus', inserted_student_messages.attendance_status,
+		'createdAt', TO_CHAR(inserted_student_messages.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+		'updatedAt', TO_CHAR(inserted_student_messages.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+		'lastModifiedAt', TO_CHAR(inserted_student_messages.last_modified_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+		'syncStatus', 'synced'
+	),
+	inserted_student_messages.last_modified_at
+FROM inserted_student_messages;
 `
 
 func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {

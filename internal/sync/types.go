@@ -4,6 +4,7 @@ import "encoding/json"
 
 type EntityName string
 type Operation string
+type AttendanceActionType string
 
 const (
 	EntityClubs                   EntityName = "clubs"
@@ -11,6 +12,7 @@ const (
 	EntityClubSchedules           EntityName = "club_schedules"
 	EntityBeltRanks               EntityName = "belt_ranks"
 	EntityStudents                EntityName = "students"
+	EntityStudentMessages         EntityName = "student_messages"
 	EntityStudentScheduleProfiles EntityName = "student_schedule_profiles"
 	EntityStudentSchedules        EntityName = "student_schedules"
 	EntityAttendanceSessions      EntityName = "attendance_sessions"
@@ -18,6 +20,13 @@ const (
 
 	OperationUpsert Operation = "upsert"
 	OperationDelete Operation = "delete"
+
+	AttendanceActionCreateSession    AttendanceActionType = "create_session"
+	AttendanceActionSetRecordStatus  AttendanceActionType = "set_record_status"
+	AttendanceActionSetRecordNote    AttendanceActionType = "set_record_note"
+	AttendanceActionSetSessionNote   AttendanceActionType = "set_session_note"
+	AttendanceActionSetSessionStatus AttendanceActionType = "set_session_status"
+	AttendanceActionDeleteSession    AttendanceActionType = "delete_session"
 )
 
 type PushRequest struct {
@@ -55,6 +64,46 @@ type PushResponse struct {
 	Conflicts  []Conflict      `json:"conflicts"`
 }
 
+type AttendanceActionPushRequest struct {
+	DeviceID string                     `json:"deviceId"`
+	Actions  []AttendanceActionMutation `json:"actions"`
+}
+
+type AttendanceActionMutation struct {
+	ActionID         string               `json:"actionId"`
+	ActionType       AttendanceActionType `json:"actionType"`
+	ClubID           string               `json:"clubId"`
+	SessionID        string               `json:"sessionId"`
+	RecordID         *string              `json:"recordId,omitempty"`
+	StudentID        *string              `json:"studentId,omitempty"`
+	Payload          json.RawMessage      `json:"payload"`
+	ClientOccurredAt string               `json:"clientOccurredAt"`
+}
+
+type AttendanceActionAppliedChange struct {
+	EntityName       EntityName      `json:"entityName"`
+	Record           json.RawMessage `json:"record"`
+	ServerModifiedAt string          `json:"serverModifiedAt"`
+}
+
+type AttendanceActionError struct {
+	ActionID      string               `json:"actionId"`
+	ActionType    AttendanceActionType `json:"actionType"`
+	Message       string               `json:"message"`
+	RecordID      *string              `json:"recordId,omitempty"`
+	SessionID     string               `json:"sessionId"`
+	StudentID     *string              `json:"studentId,omitempty"`
+	ServerSession json.RawMessage      `json:"serverSession,omitempty"`
+	ServerRecord  json.RawMessage      `json:"serverRecord,omitempty"`
+}
+
+type AttendanceActionPushResponse struct {
+	ServerTime       string                          `json:"serverTime"`
+	AppliedActionIDs []string                        `json:"appliedActionIds"`
+	Changes          []AttendanceActionAppliedChange `json:"changes"`
+	Errors           []AttendanceActionError         `json:"errors"`
+}
+
 type PullRequest struct {
 	DeviceID string
 	Since    string
@@ -81,6 +130,7 @@ type RebaseResponse struct {
 	ClubSchedules           []ClubScheduleRecord           `json:"clubSchedules"`
 	BeltRanks               []BeltRankRecord               `json:"beltRanks"`
 	Students                []StudentRecord                `json:"students"`
+	StudentMessages         []StudentMessageRecord         `json:"studentMessages"`
 	StudentScheduleProfiles []StudentScheduleProfileRecord `json:"studentScheduleProfiles"`
 	StudentSchedules        []StudentScheduleRecord        `json:"studentSchedules"`
 	AttendanceSessions      []AttendanceSessionRecord      `json:"attendanceSessions"`
@@ -203,6 +253,20 @@ type StudentRecord struct {
 	JoinedAt    *string `json:"joinedAt,omitempty"`
 	Status      string  `json:"status"`
 	Notes       *string `json:"notes,omitempty"`
+}
+
+type StudentMessageRecord struct {
+	BaseRecord
+	StudentID             string  `json:"studentId"`
+	ClubID                string  `json:"clubId"`
+	MessageType           string  `json:"messageType"`
+	Content               string  `json:"content"`
+	AuthorUserID          *string `json:"authorUserId,omitempty"`
+	AuthorName            string  `json:"authorName"`
+	AttendanceSessionID   *string `json:"attendanceSessionId,omitempty"`
+	AttendanceRecordID    *string `json:"attendanceRecordId,omitempty"`
+	AttendanceSessionDate *string `json:"attendanceSessionDate,omitempty"`
+	AttendanceStatus      *string `json:"attendanceStatus,omitempty"`
 }
 
 type StudentScheduleProfileRecord struct {

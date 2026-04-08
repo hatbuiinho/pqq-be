@@ -50,6 +50,7 @@ func New(
 		authenticated.POST("/auth/club-invites", authHandler.CreateClubInvite)
 		authenticated.POST("/auth/club-invites/by-id/:inviteId/revoke", authHandler.RevokeClubInvite)
 		authenticated.POST("/sync/push", syncHandler.Push)
+		authenticated.POST("/sync/attendance-actions", syncHandler.PushAttendanceActions)
 		authenticated.GET("/sync/pull", syncHandler.Pull)
 		authenticated.GET("/sync/rebase", syncHandler.Rebase)
 		authenticated.POST("/clubs/import", syncHandler.ImportClubs)

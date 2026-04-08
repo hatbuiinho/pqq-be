@@ -36,6 +36,10 @@ func (s *Service) ResolveMutationScope(
 		return resolveClubLinkedScope[StudentRecord](ctx, tx, s.store, mutation, existing, func(record StudentRecord) string {
 			return record.ClubID
 		})
+	case EntityStudentMessages:
+		return resolveStudentLinkedScope[StudentMessageRecord](ctx, tx, s.store, mutation, existing, func(record StudentMessageRecord) string {
+			return record.StudentID
+		})
 	case EntityStudentScheduleProfiles:
 		return resolveStudentLinkedScope[StudentScheduleProfileRecord](ctx, tx, s.store, mutation, existing, func(record StudentScheduleProfileRecord) string {
 			return record.StudentID
@@ -72,6 +76,10 @@ func (s *Service) ResolveStoredRecordScope(ctx context.Context, record StoredRec
 	case EntityStudents:
 		return resolveStoredClubLinkedScope[StudentRecord](record, func(value StudentRecord) string {
 			return value.ClubID
+		})
+	case EntityStudentMessages:
+		return resolveStoredStudentLinkedScope[StudentMessageRecord](ctx, s.store, record, func(value StudentMessageRecord) string {
+			return value.StudentID
 		})
 	case EntityStudentScheduleProfiles:
 		return resolveStoredStudentLinkedScope[StudentScheduleProfileRecord](ctx, s.store, record, func(value StudentScheduleProfileRecord) string {

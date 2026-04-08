@@ -169,3 +169,21 @@ CREATE TABLE audit_logs (
 	metadata JSONB NOT NULL,
 	created_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE student_messages (
+	id TEXT PRIMARY KEY,
+	student_id TEXT NOT NULL REFERENCES students(id),
+	club_id TEXT NOT NULL REFERENCES clubs(id),
+	message_type TEXT NOT NULL,
+	content TEXT NOT NULL,
+	author_user_id TEXT NULL REFERENCES users(id),
+	author_name TEXT NOT NULL,
+	attendance_session_id TEXT NULL REFERENCES attendance_sessions(id),
+	attendance_record_id TEXT NULL REFERENCES attendance_records(id),
+	attendance_session_date DATE NULL,
+	attendance_status TEXT NULL,
+	created_at TIMESTAMPTZ NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL,
+	last_modified_at TIMESTAMPTZ NOT NULL,
+	deleted_at TIMESTAMPTZ NULL
+);

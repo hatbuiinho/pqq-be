@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"pqq/be/internal/auth"
@@ -313,6 +314,8 @@ func requiredMutationPermission(mutation SyncMutation) string {
 			return auth.PermissionStudentsDelete
 		}
 		return auth.PermissionStudentsWrite
+	case EntityStudentMessages:
+		return auth.PermissionStudentsWrite
 	case EntityStudentScheduleProfiles, EntityStudentSchedules:
 		return auth.PermissionStudentsWrite
 	case EntityAttendanceSessions, EntityAttendanceRecords:
@@ -393,7 +396,7 @@ func (s *Service) Rebase(ctx context.Context) (RebaseResponse, error) {
 	if !ok || claims == nil || claims.Subject == "" {
 		return RebaseResponse{}, errors.New("unauthorized")
 	}
-	clubs, clubGroups, clubSchedules, beltRanks, students, studentScheduleProfiles, studentSchedules, attendanceSessions, attendanceRecords, err := s.store.ListAllCurrent(ctx)
+	clubs, clubGroups, clubSchedules, beltRanks, students, studentMessages, studentScheduleProfiles, studentSchedules, attendanceSessions, attendanceRecords, err := s.store.ListAllCurrent(ctx)
 	if err != nil {
 		return RebaseResponse{}, err
 	}
@@ -414,6 +417,9 @@ func (s *Service) Rebase(ctx context.Context) (RebaseResponse, error) {
 			return allowedClubIDs[record.ClubID]
 		})
 		students = filterRecords(students, func(record StudentRecord) bool {
+			return allowedClubIDs[record.ClubID]
+		})
+		studentMessages = filterRecords(studentMessages, func(record StudentMessageRecord) bool {
 			return allowedClubIDs[record.ClubID]
 		})
 
@@ -449,6 +455,7 @@ func (s *Service) Rebase(ctx context.Context) (RebaseResponse, error) {
 		ClubSchedules:           clubSchedules,
 		BeltRanks:               beltRanks,
 		Students:                students,
+		StudentMessages:         studentMessages,
 		StudentScheduleProfiles: studentScheduleProfiles,
 		StudentSchedules:        studentSchedules,
 		AttendanceSessions:      attendanceSessions,
@@ -518,7 +525,7 @@ func requiredReadPermission(entityName EntityName) string {
 		return auth.PermissionClubRead
 	case EntityBeltRanks:
 		return auth.PermissionBeltRanksRead
-	case EntityStudents, EntityStudentScheduleProfiles, EntityStudentSchedules:
+	case EntityStudents, EntityStudentMessages, EntityStudentScheduleProfiles, EntityStudentSchedules:
 		return auth.PermissionStudentsRead
 	case EntityAttendanceSessions, EntityAttendanceRecords:
 		return auth.PermissionAttendanceRead
@@ -757,6 +764,59 @@ func (s *Service) canonicalizeMutation(
 		}
 
 		record.ID = mutation.RecordID
+		record.UpdatedAt = serverNow
+		record.LastModifiedAt = serverNow
+		record.SyncStatus = "synced"
+		if record.CreatedAt == "" {
+			record.CreatedAt = serverNow
+		}
+		if mutation.Operation == OperationDelete {
+			record.DeletedAt = stringPtr(serverNow)
+		}
+		payload, err := json.Marshal(record)
+		return payload, record.DeletedAt, err
+	case EntityStudentMessages:
+		var record StudentMessageRecord
+		if err := json.Unmarshal(mutation.Record, &record); err != nil {
+			return nil, nil, err
+		}
+		if record.StudentID == "" || record.ClubID == "" {
+			return nil, nil, errors.New("student message studentId and clubId are required")
+		}
+		if record.MessageType != "manual" && record.MessageType != "attendance_note" {
+			return nil, nil, errors.New("student message type is invalid")
+		}
+		if mutation.Operation != OperationDelete && record.MessageType == "attendance_note" {
+			return nil, nil, conflictError{
+				reason:  "validation_failed",
+				message: "Attendance note messages are managed by the attendance system.",
+			}
+		}
+		if mutation.Operation != OperationDelete && strings.TrimSpace(record.AuthorName) == "" {
+			return nil, nil, errors.New("student message authorName is required")
+		}
+		if mutation.Operation != OperationDelete && record.MessageType == "manual" && (record.AuthorUserID == nil || *record.AuthorUserID == "") {
+			return nil, nil, errors.New("student message authorUserId is required")
+		}
+		if strings.TrimSpace(record.Content) == "" && mutation.Operation != OperationDelete {
+			return nil, nil, errors.New("student message content is required")
+		}
+		studentExists, err := s.store.RecordExists(ctx, tx, EntityStudents, record.StudentID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !studentExists {
+			return nil, nil, conflictError{reason: "foreign_key_missing", message: "Student does not exist."}
+		}
+		clubExists, err := s.store.RecordExists(ctx, tx, EntityClubs, record.ClubID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !clubExists {
+			return nil, nil, conflictError{reason: "foreign_key_missing", message: "Club does not exist."}
+		}
+		record.ID = mutation.RecordID
+		record.Content = strings.TrimSpace(record.Content)
 		record.UpdatedAt = serverNow
 		record.LastModifiedAt = serverNow
 		record.SyncStatus = "synced"
