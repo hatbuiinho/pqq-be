@@ -114,6 +114,96 @@ func (s *SyncStore) UpsertRecord(ctx context.Context, tx pgx.Tx, record sync.Sto
 	return insertChangeLog(ctx, tx, record)
 }
 
+func (s *SyncStore) UpsertAttendanceRecordsBatch(
+	ctx context.Context,
+	tx pgx.Tx,
+	records []sync.StoredRecord,
+) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	const upsertQuery = `
+		INSERT INTO attendance_records (
+			id, session_id, student_id, attendance_status, check_in_at, notes, created_at, updated_at, last_modified_at, deleted_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		)
+		ON CONFLICT (id) DO UPDATE
+		SET session_id = EXCLUDED.session_id,
+			student_id = EXCLUDED.student_id,
+			attendance_status = EXCLUDED.attendance_status,
+			check_in_at = EXCLUDED.check_in_at,
+			notes = EXCLUDED.notes,
+			updated_at = EXCLUDED.updated_at,
+			last_modified_at = EXCLUDED.last_modified_at,
+			deleted_at = EXCLUDED.deleted_at
+	`
+	const changeLogQuery = `
+		INSERT INTO sync_change_log (entity_name, record_id, payload, server_modified_at)
+		VALUES ($1, $2, $3, $4)
+	`
+
+	batch := &pgx.Batch{}
+	for _, stored := range records {
+		var record sync.AttendanceRecord
+		if err := json.Unmarshal(stored.Payload, &record); err != nil {
+			return err
+		}
+
+		createdAt, updatedAt, lastModifiedAt, deletedAt, err := parseAuditTimes(
+			record.CreatedAt,
+			record.UpdatedAt,
+			record.LastModifiedAt,
+			record.DeletedAt,
+		)
+		if err != nil {
+			return err
+		}
+		checkInAt, err := parseOptionalTimestamp(record.CheckInAt)
+		if err != nil {
+			return err
+		}
+		serverModifiedAt, err := time.Parse(time.RFC3339Nano, stored.ServerModifiedAt)
+		if err != nil {
+			return err
+		}
+
+		batch.Queue(
+			upsertQuery,
+			record.ID,
+			record.SessionID,
+			record.StudentID,
+			record.AttendanceStatus,
+			checkInAt,
+			record.Notes,
+			createdAt,
+			updatedAt,
+			lastModifiedAt,
+			deletedAt,
+		)
+		batch.Queue(
+			changeLogQuery,
+			stored.EntityName,
+			stored.RecordID,
+			jsonbValue(stored.Payload),
+			serverModifiedAt,
+		)
+	}
+
+	results := tx.SendBatch(ctx, batch)
+	defer results.Close()
+	for range records {
+		if _, err := results.Exec(); err != nil {
+			return err
+		}
+		if _, err := results.Exec(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *SyncStore) ListChangesSince(ctx context.Context, since string, limit int) ([]sync.StoredRecord, error) {
 	sinceTime, sinceChangeID, err := parseSyncCursor(since)
 	if err != nil {

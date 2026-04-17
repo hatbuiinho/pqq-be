@@ -11,6 +11,7 @@ type Store interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 	GetRecordForUpdate(ctx context.Context, tx pgx.Tx, entityName EntityName, recordID string) (*StoredRecord, error)
 	UpsertRecord(ctx context.Context, tx pgx.Tx, record StoredRecord) error
+	UpsertAttendanceRecordsBatch(ctx context.Context, tx pgx.Tx, records []StoredRecord) error
 	ListChangesSince(ctx context.Context, since string, limit int) ([]StoredRecord, error)
 	IsMutationProcessed(ctx context.Context, tx pgx.Tx, deviceID string, mutationID string) (bool, error)
 	SaveProcessedMutation(ctx context.Context, tx pgx.Tx, deviceID string, mutation SyncMutation, serverModifiedAt string) error

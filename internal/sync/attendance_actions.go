@@ -110,12 +110,15 @@ func (s *Service) PushAttendanceActions(
 		}
 
 		response.AppliedActionIDs = append(response.AppliedActionIDs, action.ActionID)
+		includeChangesInResponse := action.ActionType != AttendanceActionCreateSession
 		for _, record := range appliedRecords {
-			response.Changes = append(response.Changes, AttendanceActionAppliedChange{
-				EntityName:       record.EntityName,
-				Record:           json.RawMessage(record.Payload),
-				ServerModifiedAt: record.ServerModifiedAt,
-			})
+			if includeChangesInResponse {
+				response.Changes = append(response.Changes, AttendanceActionAppliedChange{
+					EntityName:       record.EntityName,
+					Record:           json.RawMessage(record.Payload),
+					ServerModifiedAt: record.ServerModifiedAt,
+				})
+			}
 			changedEntities = append(changedEntities, record.EntityName)
 			changedIDs = append(changedIDs, record.RecordID)
 		}
@@ -223,6 +226,7 @@ func (s *Service) applyAttendanceCreateSessionAction(
 	}
 
 	applied := []StoredRecord{sessionRecord}
+	attendanceRecords := make([]StoredRecord, 0, len(payload.Records))
 	for _, record := range payload.Records {
 		if record.SessionID != action.SessionID {
 			return nil, conflictError{reason: "validation_failed", message: "Attendance record session does not match the action session."}
@@ -238,12 +242,24 @@ func (s *Service) applyAttendanceCreateSessionAction(
 		if err != nil {
 			return nil, err
 		}
-		attendanceRecord, err := s.upsertAttendanceActionMutation(ctx, tx, recordMutation, nil, serverNow)
+		canonicalPayload, deletedAt, err := s.canonicalizeMutation(ctx, tx, recordMutation, serverNow, nil)
 		if err != nil {
 			return nil, err
 		}
-		applied = append(applied, attendanceRecord)
+		attendanceRecords = append(attendanceRecords, StoredRecord{
+			EntityName:       EntityAttendanceRecords,
+			RecordID:         record.ID,
+			Payload:          canonicalPayload,
+			DeletedAt:        deletedAt,
+			LastModifiedAt:   serverNow,
+			ServerModifiedAt: serverNow,
+		})
 	}
+
+	if err := s.store.UpsertAttendanceRecordsBatch(ctx, tx, attendanceRecords); err != nil {
+		return nil, err
+	}
+	applied = append(applied, attendanceRecords...)
 
 	return applied, nil
 }
@@ -324,6 +340,9 @@ func (s *Service) applyAttendanceSetRecordNoteAction(
 	}
 	appliedRecord, err := s.upsertAttendanceActionMutation(ctx, tx, mutation, existing, serverNow)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.syncAttendanceRecordMessage(ctx, tx, action, session, record, serverNow); err != nil {
 		return nil, err
 	}
 
