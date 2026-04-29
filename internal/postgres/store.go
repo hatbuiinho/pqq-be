@@ -204,6 +204,110 @@ func (s *SyncStore) UpsertAttendanceRecordsBatch(
 	return nil
 }
 
+func (s *SyncStore) UpsertStudentMessagesBatch(
+	ctx context.Context,
+	tx pgx.Tx,
+	records []sync.StoredRecord,
+) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	const upsertQuery = `
+		INSERT INTO student_messages (
+			id, student_id, club_id, message_type, content, author_user_id, author_name,
+			attendance_session_id, attendance_record_id, attendance_session_date, attendance_status,
+			created_at, updated_at, last_modified_at, deleted_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11,
+			$12, $13, $14, $15
+		)
+		ON CONFLICT (id) DO UPDATE
+		SET student_id = EXCLUDED.student_id,
+			club_id = EXCLUDED.club_id,
+			message_type = EXCLUDED.message_type,
+			content = EXCLUDED.content,
+			author_user_id = EXCLUDED.author_user_id,
+			author_name = EXCLUDED.author_name,
+			attendance_session_id = EXCLUDED.attendance_session_id,
+			attendance_record_id = EXCLUDED.attendance_record_id,
+			attendance_session_date = EXCLUDED.attendance_session_date,
+			attendance_status = EXCLUDED.attendance_status,
+			updated_at = EXCLUDED.updated_at,
+			last_modified_at = EXCLUDED.last_modified_at,
+			deleted_at = EXCLUDED.deleted_at
+	`
+	const changeLogQuery = `
+		INSERT INTO sync_change_log (entity_name, record_id, payload, server_modified_at)
+		VALUES ($1, $2, $3, $4)
+	`
+
+	batch := &pgx.Batch{}
+	for _, stored := range records {
+		var record sync.StudentMessageRecord
+		if err := json.Unmarshal(stored.Payload, &record); err != nil {
+			return err
+		}
+
+		createdAt, updatedAt, lastModifiedAt, deletedAt, err := parseAuditTimes(
+			record.CreatedAt,
+			record.UpdatedAt,
+			record.LastModifiedAt,
+			record.DeletedAt,
+		)
+		if err != nil {
+			return err
+		}
+		attendanceSessionDate, err := parseOptionalDate(record.AttendanceSessionDate)
+		if err != nil {
+			return err
+		}
+		serverModifiedAt, err := time.Parse(time.RFC3339Nano, stored.ServerModifiedAt)
+		if err != nil {
+			return err
+		}
+
+		batch.Queue(
+			upsertQuery,
+			record.ID,
+			record.StudentID,
+			record.ClubID,
+			record.MessageType,
+			record.Content,
+			record.AuthorUserID,
+			record.AuthorName,
+			record.AttendanceSessionID,
+			record.AttendanceRecordID,
+			attendanceSessionDate,
+			record.AttendanceStatus,
+			createdAt,
+			updatedAt,
+			lastModifiedAt,
+			deletedAt,
+		)
+		batch.Queue(
+			changeLogQuery,
+			stored.EntityName,
+			stored.RecordID,
+			jsonbValue(stored.Payload),
+			serverModifiedAt,
+		)
+	}
+
+	results := tx.SendBatch(ctx, batch)
+	defer results.Close()
+	for range records {
+		if _, err := results.Exec(); err != nil {
+			return err
+		}
+		if _, err := results.Exec(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *SyncStore) ListChangesSince(ctx context.Context, since string, limit int) ([]sync.StoredRecord, error) {
 	sinceTime, sinceChangeID, err := parseSyncCursor(since)
 	if err != nil {
@@ -1093,6 +1197,225 @@ func (s *SyncStore) ListAllCurrent(ctx context.Context) ([]sync.ClubRecord, []sy
 	return clubs, clubGroups, clubSchedules, beltRanks, students, studentMessages, studentScheduleProfiles, studentSchedules, attendanceSessions, attendanceRecords, nil
 }
 
+func (s *SyncStore) ListActiveStudentsByClub(
+	ctx context.Context,
+	tx pgx.Tx,
+	clubID string,
+) ([]sync.StudentRecord, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, student_code, full_name, date_of_birth, gender, phone, email, address,
+			club_id, group_id, belt_rank_id, joined_at, status, notes, created_at, updated_at,
+			last_modified_at, deleted_at
+		FROM students
+		WHERE club_id = $1
+			AND deleted_at IS NULL
+			AND status = 'active'
+		ORDER BY full_name ASC, created_at ASC
+	`, clubID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := make([]sync.StudentRecord, 0)
+	for rows.Next() {
+		var row db.Student
+		if err := rows.Scan(
+			&row.ID,
+			&row.StudentCode,
+			&row.FullName,
+			&row.DateOfBirth,
+			&row.Gender,
+			&row.Phone,
+			&row.Email,
+			&row.Address,
+			&row.ClubID,
+			&row.GroupID,
+			&row.BeltRankID,
+			&row.JoinedAt,
+			&row.Status,
+			&row.Notes,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+			&row.LastModifiedAt,
+			&row.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, studentRecordFromRow(row))
+	}
+
+	return records, rows.Err()
+}
+
+func (s *SyncStore) ListActiveClubSchedulesByClub(
+	ctx context.Context,
+	tx pgx.Tx,
+	clubID string,
+) ([]sync.ClubScheduleRecord, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, club_id, weekday, is_active, created_at, updated_at, last_modified_at, deleted_at
+		FROM club_schedules
+		WHERE club_id = $1
+			AND deleted_at IS NULL
+			AND is_active = true
+		ORDER BY weekday ASC, created_at ASC
+	`, clubID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := make([]sync.ClubScheduleRecord, 0)
+	for rows.Next() {
+		var row db.ClubSchedule
+		if err := rows.Scan(
+			&row.ID,
+			&row.ClubID,
+			&row.Weekday,
+			&row.IsActive,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+			&row.LastModifiedAt,
+			&row.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, clubScheduleRecordFromRow(row))
+	}
+
+	return records, rows.Err()
+}
+
+func (s *SyncStore) ListActiveStudentScheduleProfilesByStudentIDs(
+	ctx context.Context,
+	tx pgx.Tx,
+	studentIDs []string,
+) ([]sync.StudentScheduleProfileRecord, error) {
+	if len(studentIDs) == 0 {
+		return []sync.StudentScheduleProfileRecord{}, nil
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id, student_id, mode, created_at, updated_at, last_modified_at, deleted_at
+		FROM student_schedule_profiles
+		WHERE student_id = ANY($1)
+			AND deleted_at IS NULL
+	`, studentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := make([]sync.StudentScheduleProfileRecord, 0)
+	for rows.Next() {
+		var row db.StudentScheduleProfile
+		if err := rows.Scan(
+			&row.ID,
+			&row.StudentID,
+			&row.Mode,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+			&row.LastModifiedAt,
+			&row.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, studentScheduleProfileRecordFromRow(row))
+	}
+
+	return records, rows.Err()
+}
+
+func (s *SyncStore) ListActiveStudentSchedulesByStudentIDs(
+	ctx context.Context,
+	tx pgx.Tx,
+	studentIDs []string,
+) ([]sync.StudentScheduleRecord, error) {
+	if len(studentIDs) == 0 {
+		return []sync.StudentScheduleRecord{}, nil
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id, student_id, weekday, is_active, created_at, updated_at, last_modified_at, deleted_at
+		FROM student_schedules
+		WHERE student_id = ANY($1)
+			AND deleted_at IS NULL
+			AND is_active = true
+	`, studentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := make([]sync.StudentScheduleRecord, 0)
+	for rows.Next() {
+		var row db.StudentSchedule
+		if err := rows.Scan(
+			&row.ID,
+			&row.StudentID,
+			&row.Weekday,
+			&row.IsActive,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+			&row.LastModifiedAt,
+			&row.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, studentScheduleRecordFromRow(row))
+	}
+
+	return records, rows.Err()
+}
+
+func (s *SyncStore) FindAttendanceSessionByClubAndDate(
+	ctx context.Context,
+	tx pgx.Tx,
+	clubID string,
+	sessionDate string,
+) (*sync.StoredRecord, error) {
+	parsedDate, err := time.Parse("2006-01-02", sessionDate)
+	if err != nil {
+		return nil, err
+	}
+
+	row := tx.QueryRow(ctx, `
+		SELECT id, club_id, session_date, status, notes, created_at, updated_at, last_modified_at, deleted_at
+		FROM attendance_sessions
+		WHERE club_id = $1
+			AND session_date = $2
+		LIMIT 1
+	`, clubID, parsedDate)
+
+	var attendanceSession db.AttendanceSession
+	if err := row.Scan(
+		&attendanceSession.ID,
+		&attendanceSession.ClubID,
+		&attendanceSession.SessionDate,
+		&attendanceSession.Status,
+		&attendanceSession.Notes,
+		&attendanceSession.CreatedAt,
+		&attendanceSession.UpdatedAt,
+		&attendanceSession.LastModifiedAt,
+		&attendanceSession.DeletedAt,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	record := attendanceSessionRecordFromRow(attendanceSession)
+	return storedRecordFromSyncRecord(
+		sync.EntityAttendanceSessions,
+		record.ID,
+		record.DeletedAt,
+		record.LastModifiedAt,
+		record,
+	)
+}
+
 func getClubForUpdate(ctx context.Context, tx pgx.Tx, recordID string) (*sync.StoredRecord, error) {
 	query := `
 		SELECT id, code, name, phone, email, address, notes, is_active, created_at, updated_at, last_modified_at, deleted_at
@@ -1334,6 +1657,81 @@ func getStudentMessageForUpdate(ctx context.Context, tx pgx.Tx, recordID string)
 	}
 	record.EntityName = sync.EntityStudentMessages
 	return record, nil
+}
+
+func (s *SyncStore) ListStudentMessagesByAttendanceSessionForUpdate(
+	ctx context.Context,
+	tx pgx.Tx,
+	sessionID string,
+) ([]sync.StoredRecord, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, student_id, club_id, message_type, content, author_user_id, author_name,
+			attendance_session_id, attendance_record_id, attendance_session_date, attendance_status,
+			created_at, updated_at, last_modified_at, deleted_at
+		FROM student_messages
+		WHERE attendance_session_id = $1
+			AND deleted_at IS NULL
+		FOR UPDATE
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := make([]sync.StoredRecord, 0)
+	for rows.Next() {
+		var record sync.StudentMessageRecord
+		var createdAt, updatedAt, lastModifiedAt time.Time
+		var deletedAt *time.Time
+		var attendanceSessionDate *time.Time
+
+		if err := rows.Scan(
+			&record.ID,
+			&record.StudentID,
+			&record.ClubID,
+			&record.MessageType,
+			&record.Content,
+			&record.AuthorUserID,
+			&record.AuthorName,
+			&record.AttendanceSessionID,
+			&record.AttendanceRecordID,
+			&attendanceSessionDate,
+			&record.AttendanceStatus,
+			&createdAt,
+			&updatedAt,
+			&lastModifiedAt,
+			&deletedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		record.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
+		record.LastModifiedAt = lastModifiedAt.UTC().Format(time.RFC3339Nano)
+		record.SyncStatus = "synced"
+		if deletedAt != nil {
+			value := deletedAt.UTC().Format(time.RFC3339Nano)
+			record.DeletedAt = &value
+		}
+		if attendanceSessionDate != nil {
+			value := attendanceSessionDate.UTC().Format("2006-01-02")
+			record.AttendanceSessionDate = &value
+		}
+
+		storedRecord, err := storedRecordFromSyncRecord(
+			sync.EntityStudentMessages,
+			record.ID,
+			record.DeletedAt,
+			record.LastModifiedAt,
+			record,
+		)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, *storedRecord)
+	}
+
+	return records, rows.Err()
 }
 
 func getStudentScheduleProfileForUpdate(ctx context.Context, tx pgx.Tx, recordID string) (*sync.StoredRecord, error) {

@@ -49,6 +49,7 @@ func New(
 		authenticated.GET("/auth/club-invites", authHandler.ListClubInvites)
 		authenticated.POST("/auth/club-invites", authHandler.CreateClubInvite)
 		authenticated.POST("/auth/club-invites/by-id/:inviteId/revoke", authHandler.RevokeClubInvite)
+		authenticated.POST("/attendance/sessions", syncHandler.CreateAttendanceSession)
 		authenticated.POST("/sync/push", syncHandler.Push)
 		authenticated.POST("/sync/attendance-actions", syncHandler.PushAttendanceActions)
 		authenticated.GET("/sync/pull", syncHandler.Pull)

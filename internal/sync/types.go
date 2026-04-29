@@ -22,6 +22,7 @@ const (
 	OperationDelete Operation = "delete"
 
 	AttendanceActionCreateSession    AttendanceActionType = "create_session"
+	AttendanceActionMarkAllPresent   AttendanceActionType = "mark_all_present"
 	AttendanceActionSetRecordStatus  AttendanceActionType = "set_record_status"
 	AttendanceActionSetRecordNote    AttendanceActionType = "set_record_note"
 	AttendanceActionSetSessionNote   AttendanceActionType = "set_session_note"
@@ -102,6 +103,18 @@ type AttendanceActionPushResponse struct {
 	AppliedActionIDs []string                        `json:"appliedActionIds"`
 	Changes          []AttendanceActionAppliedChange `json:"changes"`
 	Errors           []AttendanceActionError         `json:"errors"`
+}
+
+type CreateAttendanceSessionRequest struct {
+	ClubID      string  `json:"clubId"`
+	SessionDate string  `json:"sessionDate"`
+	Notes       *string `json:"notes,omitempty"`
+}
+
+type CreateAttendanceSessionResponse struct {
+	ServerTime string                  `json:"serverTime"`
+	Session    AttendanceSessionRecord `json:"session"`
+	Records    []AttendanceRecord      `json:"records"`
 }
 
 type PullRequest struct {

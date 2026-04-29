@@ -23,6 +23,11 @@ type attendanceSetRecordStatusPayload struct {
 	CheckInAt        *string `json:"checkInAt,omitempty"`
 }
 
+type attendanceMarkAllPresentPayload struct {
+	RecordIDs []string `json:"recordIds"`
+	CheckInAt *string  `json:"checkInAt,omitempty"`
+}
+
 type attendanceSetRecordNotePayload struct {
 	Notes *string `json:"notes,omitempty"`
 }
@@ -110,7 +115,9 @@ func (s *Service) PushAttendanceActions(
 		}
 
 		response.AppliedActionIDs = append(response.AppliedActionIDs, action.ActionID)
-		includeChangesInResponse := action.ActionType != AttendanceActionCreateSession
+		includeChangesInResponse :=
+			action.ActionType != AttendanceActionCreateSession &&
+				action.ActionType != AttendanceActionMarkAllPresent
 		for _, record := range appliedRecords {
 			if includeChangesInResponse {
 				response.Changes = append(response.Changes, AttendanceActionAppliedChange{
@@ -162,6 +169,8 @@ func (s *Service) applyAttendanceAction(
 	switch action.ActionType {
 	case AttendanceActionCreateSession:
 		return s.applyAttendanceCreateSessionAction(ctx, tx, action, serverNow)
+	case AttendanceActionMarkAllPresent:
+		return s.applyAttendanceMarkAllPresentAction(ctx, tx, action, serverNow)
 	case AttendanceActionSetRecordStatus:
 		return s.applyAttendanceSetRecordStatusAction(ctx, tx, action, serverNow)
 	case AttendanceActionSetRecordNote:
@@ -307,6 +316,91 @@ func (s *Service) applyAttendanceSetRecordStatusAction(
 	}
 
 	return []StoredRecord{appliedRecord}, nil
+}
+
+func (s *Service) applyAttendanceMarkAllPresentAction(
+	ctx context.Context,
+	tx pgx.Tx,
+	action AttendanceActionMutation,
+	serverNow string,
+) ([]StoredRecord, error) {
+	session, _, err := s.loadAttendanceSessionActionTarget(ctx, tx, action)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload attendanceMarkAllPresentPayload
+	if err := json.Unmarshal(action.Payload, &payload); err != nil {
+		return nil, err
+	}
+	if len(payload.RecordIDs) == 0 {
+		return []StoredRecord{}, nil
+	}
+
+	targetRecordIDs := make(map[string]struct{}, len(payload.RecordIDs))
+	for _, recordID := range payload.RecordIDs {
+		if recordID == "" {
+			return nil, conflictError{reason: "validation_failed", message: "Attendance record id is required."}
+		}
+		targetRecordIDs[recordID] = struct{}{}
+	}
+
+	recordRows, err := s.store.ListAttendanceRecordsBySessionForUpdate(ctx, tx, session.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	applied := make([]StoredRecord, 0, len(targetRecordIDs))
+	for _, existingRecord := range recordRows {
+		if _, ok := targetRecordIDs[existingRecord.RecordID]; !ok {
+			continue
+		}
+
+		var record AttendanceRecord
+		if err := json.Unmarshal(existingRecord.Payload, &record); err != nil {
+			return nil, err
+		}
+		record.AttendanceStatus = "present"
+		record.CheckInAt = payload.CheckInAt
+
+		recordMutation, err := marshalSyncMutation(
+			fmt.Sprintf("%s:%s", action.ActionID, record.ID),
+			EntityAttendanceRecords,
+			OperationUpsert,
+			record.ID,
+			record,
+			action.ClientOccurredAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		canonicalPayload, deletedAt, err := s.canonicalizeMutation(ctx, tx, recordMutation, serverNow, &existingRecord)
+		if err != nil {
+			return nil, err
+		}
+		applied = append(applied, StoredRecord{
+			EntityName:       EntityAttendanceRecords,
+			RecordID:         record.ID,
+			Payload:          canonicalPayload,
+			DeletedAt:        deletedAt,
+			LastModifiedAt:   serverNow,
+			ServerModifiedAt: serverNow,
+		})
+		delete(targetRecordIDs, record.ID)
+	}
+
+	if len(targetRecordIDs) > 0 {
+		return nil, conflictError{
+			reason:  "foreign_key_missing",
+			message: "Some attendance records do not exist in this session.",
+		}
+	}
+
+	if err := s.store.UpsertAttendanceRecordsBatch(ctx, tx, applied); err != nil {
+		return nil, err
+	}
+
+	return applied, nil
 }
 
 func (s *Service) applyAttendanceSetRecordNoteAction(
@@ -472,6 +566,7 @@ func (s *Service) applyAttendanceDeleteSessionAction(
 	}
 
 	applied := []StoredRecord{deletedSession}
+	deletedRecords := make([]StoredRecord, 0, len(recordRows))
 	for _, existingRecord := range recordRows {
 		var record AttendanceRecord
 		if err := json.Unmarshal(existingRecord.Payload, &record); err != nil {
@@ -488,14 +583,60 @@ func (s *Service) applyAttendanceDeleteSessionAction(
 		if err != nil {
 			return nil, err
 		}
-		deletedRecord, err := s.upsertAttendanceActionMutation(ctx, tx, recordMutation, &existingRecord, serverNow)
+		canonicalPayload, deletedAt, err := s.canonicalizeMutation(ctx, tx, recordMutation, serverNow, &existingRecord)
 		if err != nil {
 			return nil, err
 		}
-		applied = append(applied, deletedRecord)
-		if err := s.deleteAttendanceMirrorMessage(ctx, tx, action, record, serverNow); err != nil {
+		deletedRecords = append(deletedRecords, StoredRecord{
+			EntityName:       EntityAttendanceRecords,
+			RecordID:         record.ID,
+			Payload:          canonicalPayload,
+			DeletedAt:        deletedAt,
+			LastModifiedAt:   serverNow,
+			ServerModifiedAt: serverNow,
+		})
+	}
+	if err := s.store.UpsertAttendanceRecordsBatch(ctx, tx, deletedRecords); err != nil {
+		return nil, err
+	}
+	applied = append(applied, deletedRecords...)
+
+	messageRows, err := s.store.ListStudentMessagesByAttendanceSessionForUpdate(ctx, tx, session.ID)
+	if err != nil {
+		return nil, err
+	}
+	deletedMessages := make([]StoredRecord, 0, len(messageRows))
+	for _, existingMessage := range messageRows {
+		var messageRecord StudentMessageRecord
+		if err := json.Unmarshal(existingMessage.Payload, &messageRecord); err != nil {
 			return nil, err
 		}
+		deleteMutation, err := marshalSyncMutation(
+			fmt.Sprintf("%s:mirror-delete:%s", action.ActionID, messageRecord.ID),
+			EntityStudentMessages,
+			OperationDelete,
+			messageRecord.ID,
+			messageRecord,
+			action.ClientOccurredAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		canonicalPayload, deletedAt, err := s.canonicalizeMutation(ctx, tx, deleteMutation, serverNow, &existingMessage)
+		if err != nil {
+			return nil, err
+		}
+		deletedMessages = append(deletedMessages, StoredRecord{
+			EntityName:       EntityStudentMessages,
+			RecordID:         messageRecord.ID,
+			Payload:          canonicalPayload,
+			DeletedAt:        deletedAt,
+			LastModifiedAt:   serverNow,
+			ServerModifiedAt: serverNow,
+		})
+	}
+	if err := s.store.UpsertStudentMessagesBatch(ctx, tx, deletedMessages); err != nil {
+		return nil, err
 	}
 
 	if err := s.writeAttendanceActionAuditLog(ctx, tx, action, session, existingSession, deletedSession); err != nil {
@@ -647,6 +788,8 @@ func attendanceActionAuditAction(action AttendanceActionMutation) string {
 	switch action.ActionType {
 	case AttendanceActionCreateSession:
 		return "create"
+	case AttendanceActionMarkAllPresent:
+		return "update_status"
 	case AttendanceActionDeleteSession:
 		return "delete"
 	case AttendanceActionSetSessionStatus:
@@ -662,6 +805,8 @@ func attendanceActionAuditAction(action AttendanceActionMutation) string {
 
 func attendanceProcessedMutationTarget(action AttendanceActionMutation) (EntityName, string) {
 	switch action.ActionType {
+	case AttendanceActionMarkAllPresent:
+		return EntityAttendanceSessions, action.SessionID
 	case AttendanceActionSetRecordStatus, AttendanceActionSetRecordNote:
 		if action.RecordID != nil && *action.RecordID != "" {
 			return EntityAttendanceRecords, *action.RecordID
@@ -734,6 +879,7 @@ func validateAttendanceAction(action AttendanceActionMutation) error {
 	}
 	switch action.ActionType {
 	case AttendanceActionCreateSession,
+		AttendanceActionMarkAllPresent,
 		AttendanceActionSetRecordStatus,
 		AttendanceActionSetRecordNote,
 		AttendanceActionSetSessionNote,
@@ -840,38 +986,4 @@ func (s *Service) syncAttendanceRecordMessage(
 
 func attendanceMessageID(attendanceRecordID string) string {
 	return fmt.Sprintf("attendance-note-%s", attendanceRecordID)
-}
-
-func (s *Service) deleteAttendanceMirrorMessage(
-	ctx context.Context,
-	tx pgx.Tx,
-	action AttendanceActionMutation,
-	record AttendanceRecord,
-	serverNow string,
-) error {
-	messageID := attendanceMessageID(record.ID)
-	existingMessage, err := s.store.GetRecordForUpdate(ctx, tx, EntityStudentMessages, messageID)
-	if err != nil || existingMessage == nil {
-		return err
-	}
-
-	var existingRecord StudentMessageRecord
-	if err := json.Unmarshal(existingMessage.Payload, &existingRecord); err != nil {
-		return err
-	}
-
-	deleteMutation, err := marshalSyncMutation(
-		fmt.Sprintf("%s:mirror-delete:%s", action.ActionID, record.ID),
-		EntityStudentMessages,
-		OperationDelete,
-		messageID,
-		existingRecord,
-		action.ClientOccurredAt,
-	)
-	if err != nil {
-		return err
-	}
-
-	_, err = s.upsertAttendanceActionMutation(ctx, tx, deleteMutation, existingMessage, serverNow)
-	return err
 }

@@ -12,6 +12,7 @@ type Store interface {
 	GetRecordForUpdate(ctx context.Context, tx pgx.Tx, entityName EntityName, recordID string) (*StoredRecord, error)
 	UpsertRecord(ctx context.Context, tx pgx.Tx, record StoredRecord) error
 	UpsertAttendanceRecordsBatch(ctx context.Context, tx pgx.Tx, records []StoredRecord) error
+	UpsertStudentMessagesBatch(ctx context.Context, tx pgx.Tx, records []StoredRecord) error
 	ListChangesSince(ctx context.Context, since string, limit int) ([]StoredRecord, error)
 	IsMutationProcessed(ctx context.Context, tx pgx.Tx, deviceID string, mutationID string) (bool, error)
 	SaveProcessedMutation(ctx context.Context, tx pgx.Tx, deviceID string, mutation SyncMutation, serverModifiedAt string) error
@@ -26,6 +27,7 @@ type Store interface {
 	FindStudentScheduleByWeekday(ctx context.Context, tx pgx.Tx, studentID string, weekday string, excludeID string) (*StoredRecord, error)
 	FindAttendanceRecordBySessionAndStudent(ctx context.Context, tx pgx.Tx, sessionID string, studentID string, excludeID string) (*StoredRecord, error)
 	ListAttendanceRecordsBySessionForUpdate(ctx context.Context, tx pgx.Tx, sessionID string) ([]StoredRecord, error)
+	ListStudentMessagesByAttendanceSessionForUpdate(ctx context.Context, tx pgx.Tx, sessionID string) ([]StoredRecord, error)
 	ListClubScheduleWeekdays(ctx context.Context, tx pgx.Tx, clubID string) ([]string, error)
 	ReplaceStudentSchedule(ctx context.Context, tx pgx.Tx, studentID string, mode string, weekdays []string, serverNow string) error
 	RecordExists(ctx context.Context, tx pgx.Tx, entityName EntityName, recordID string) (bool, error)
@@ -37,4 +39,9 @@ type Store interface {
 	FindActiveStudentProfileByCode(ctx context.Context, studentCode string) (*StudentPublicProfile, error)
 	InsertAuditLog(ctx context.Context, tx pgx.Tx, actorUserID *string, clubID *string, entityType string, entityID *string, action string, oldValues json.RawMessage, newValues json.RawMessage, metadata json.RawMessage) error
 	ListAllCurrent(ctx context.Context) ([]ClubRecord, []ClubGroupRecord, []ClubScheduleRecord, []BeltRankRecord, []StudentRecord, []StudentMessageRecord, []StudentScheduleProfileRecord, []StudentScheduleRecord, []AttendanceSessionRecord, []AttendanceRecord, error)
+	ListActiveStudentsByClub(ctx context.Context, tx pgx.Tx, clubID string) ([]StudentRecord, error)
+	ListActiveClubSchedulesByClub(ctx context.Context, tx pgx.Tx, clubID string) ([]ClubScheduleRecord, error)
+	ListActiveStudentScheduleProfilesByStudentIDs(ctx context.Context, tx pgx.Tx, studentIDs []string) ([]StudentScheduleProfileRecord, error)
+	ListActiveStudentSchedulesByStudentIDs(ctx context.Context, tx pgx.Tx, studentIDs []string) ([]StudentScheduleRecord, error)
+	FindAttendanceSessionByClubAndDate(ctx context.Context, tx pgx.Tx, clubID string, sessionDate string) (*StoredRecord, error)
 }
